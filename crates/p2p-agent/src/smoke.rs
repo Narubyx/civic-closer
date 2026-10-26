@@ -36,7 +36,11 @@ fn run_tool(call: &FunctionCall) -> String {
 }
 
 pub async fn run(client: &ResponsesClient) -> Result<()> {
-    println!("model: {}  base: {}", client.config().model, client.config().base_url);
+    println!(
+        "model: {}  base: {}",
+        client.config().model,
+        client.config().base_url
+    );
 
     // Two independent sums nudge the model into parallel tool calls.
     let mut input = vec![json!({
@@ -59,7 +63,10 @@ pub async fn run(client: &ResponsesClient) -> Result<()> {
         input.extend(resp.output.iter().cloned());
         for call in &calls {
             let result = run_tool(call);
-            println!("  {}({}) -> {}  [call_id {}]", call.name, call.arguments, result, call.call_id);
+            println!(
+                "  {}({}) -> {}  [call_id {}]",
+                call.name, call.arguments, result, call.call_id
+            );
             input.push(function_output(&call.call_id, &result));
         }
     }
@@ -71,7 +78,11 @@ mod tests {
     use super::*;
 
     fn call(name: &str, arguments: Value) -> FunctionCall {
-        FunctionCall { call_id: "c".into(), name: name.into(), arguments }
+        FunctionCall {
+            call_id: "c".into(),
+            name: name.into(),
+            arguments,
+        }
     }
 
     #[test]

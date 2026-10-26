@@ -38,13 +38,21 @@ impl ModelResponse {
             .iter()
             .filter(|item| item["type"] == "function_call")
             .map(|item| {
-                let name = item["name"].as_str().context("function_call without name")?;
-                let call_id = item["call_id"].as_str().context("function_call without call_id")?;
+                let name = item["name"]
+                    .as_str()
+                    .context("function_call without name")?;
+                let call_id = item["call_id"]
+                    .as_str()
+                    .context("function_call without call_id")?;
                 // `arguments` is a JSON *string*, so it needs a second parse.
                 let raw = item["arguments"].as_str().unwrap_or("{}");
                 let arguments = serde_json::from_str(raw)
                     .with_context(|| format!("bad arguments for tool `{name}`: {raw}"))?;
-                Ok(FunctionCall { call_id: call_id.into(), name: name.into(), arguments })
+                Ok(FunctionCall {
+                    call_id: call_id.into(),
+                    name: name.into(),
+                    arguments,
+                })
             })
             .collect()
     }
@@ -69,7 +77,9 @@ pub fn function_output(call_id: &str, output: &str) -> Value {
 
 impl ResponsesClient {
     pub fn new(cfg: Config) -> Result<Self> {
-        let http = reqwest::Client::builder().timeout(Duration::from_secs(120)).build()?;
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()?;
         Ok(Self { http, cfg })
     }
 

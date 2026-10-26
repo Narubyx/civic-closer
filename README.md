@@ -42,7 +42,8 @@ Everything in this repository was written during the event (Oct 26 - Nov 4, 2026
 | Date       | Log |
 |------------|-----|
 | 2026-10-26 | Day 1: Cargo workspace skeleton (`p2p-capture`, `p2p-agent`, `p2p-cli`), MIT license, `.gitignore`, README. |
-| 2026-10-26 | Day 1: `p2p-agent` Responses API client (`POST /v1/responses`) with flat tool schemas, parallel `function_call` handling and a `p2p smoke` command that runs a one-tool round trip against Muse Spark. |
+| 2026-10-26 | Day 1: `p2p-agent` Responses API client (`POST /v1/responses`) with flat tool schemas, parallel `function_call` handling and a `p2p smoke` command that runs a one-tool round trip against Muse Spark. Verified live: `muse-spark-1.3` issues parallel tool calls and accepts its own output items echoed back. |
+| 2026-10-26 | Day 1: `p2p-capture` panic hook that saves a structured incident as JSON (message, location, backtrace, context, SHA-256 fingerprint). Redaction (keys, tokens, JWTs, private keys, emails, passwords, home-directory user names) runs before anything is saved; unit and end-to-end tests included. |
 
 ## License
 

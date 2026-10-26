@@ -1,14 +1,9 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Panic capture for Panic-to-Patch: structured incidents with secrets redacted.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod hook;
+pub mod incident;
+pub mod redact;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use hook::{install, set_context};
+pub use incident::{Incident, Location};
+pub use redact::{redact, redact_value};
