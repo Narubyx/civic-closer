@@ -89,8 +89,12 @@ pub fn fingerprint(message: &str, location: Option<&Location>) -> String {
     let place = location
         .map(|l| format!("{}:{}", l.file, l.line))
         .unwrap_or_default();
-    let digest = Sha256::digest(format!("{place}|{normalized}").as_bytes());
-    // First 8 bytes (16 hex chars) is plenty for grouping incidents.
+    short_hash(&format!("{place}|{normalized}"))
+}
+
+/// First 8 bytes (16 hex chars) of the SHA-256 of `text`: plenty for grouping and naming things.
+pub fn short_hash(text: &str) -> String {
+    let digest = Sha256::digest(text.as_bytes());
     digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 

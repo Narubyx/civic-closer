@@ -5,5 +5,5 @@ pub mod incident;
 pub mod redact;
 
 pub use hook::{install, set_context};
-pub use incident::{Incident, Location};
+pub use incident::{Incident, Location, short_hash};
 pub use redact::{redact, redact_value};
