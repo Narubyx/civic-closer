@@ -186,15 +186,13 @@ mod tests {
     fn resolve_rejects_escapes() {
         let dir = tempfile::tempdir().unwrap();
         let root = dunce::canonicalize(dir.path()).unwrap();
-        for bad in [
-            "../x",
-            "src/../../x",
-            "/etc/passwd",
-            r"C:\Windows\win.ini",
-            "C:evil",
-            r"\\server\share\x",
-        ] {
-            assert!(resolve(&root, bad).is_err(), "`{bad}` should be rejected");
+        let mut bad = vec!["../x", "src/../../x", "/etc/passwd"];
+        // On Unix a backslash is an ordinary filename character, so these only escape on Windows.
+        if cfg!(windows) {
+            bad.extend([r"C:\Windows\win.ini", "C:evil", r"\\server\share\x"]);
+        }
+        for path in bad {
+            assert!(resolve(&root, path).is_err(), "`{path}` should be rejected");
         }
     }
 
