@@ -1,0 +1,19 @@
+# Rust build output
+/target
+
+# Secrets and local config -- the API key lives in the MODEL_API_KEY env var only
+.env
+.env.*
+*.key
+
+# Runtime data produced by the tool
+/incidents/
+/.p2p/
+*.sqlite
+*.sqlite-journal
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
