@@ -22,6 +22,13 @@ Panic-to-Patch is a Rust crate and agent that catches crashes, reproduces the bu
 
 PowerShell: `$env:MODEL_API_KEY = "..."` - bash: `export MODEL_API_KEY=...`
 
+Try the model round trip (PowerShell shown; bash uses `export`):
+
+```powershell
+$env:MODEL_API_KEY = "<your key>"
+cargo run -p p2p-cli -- smoke
+```
+
 ## Workspace layout
 
 - `crates/p2p-capture` - panic hook, incident JSON, redaction
@@ -35,6 +42,7 @@ Everything in this repository was written during the event (Oct 26 - Nov 4, 2026
 | Date       | Log |
 |------------|-----|
 | 2026-10-26 | Day 1: Cargo workspace skeleton (`p2p-capture`, `p2p-agent`, `p2p-cli`), MIT license, `.gitignore`, README. |
+| 2026-10-26 | Day 1: `p2p-agent` Responses API client (`POST /v1/responses`) with flat tool schemas, parallel `function_call` handling and a `p2p smoke` command that runs a one-tool round trip against Muse Spark. |
 
 ## License
 
