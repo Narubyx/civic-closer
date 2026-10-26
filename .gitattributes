@@ -1,0 +1,13 @@
+# Keep LF line endings in the repo and the working tree on every OS. This silences
+# Windows "LF will be replaced by CRLF" warnings and keeps generated patches portable.
+* text=auto eol=lf
+
+# Binary assets (Git would detect most of these, but be explicit).
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.wav binary
+*.ogg binary
+*.glb binary
