@@ -29,6 +29,14 @@ $env:MODEL_API_KEY = "<your key>"
 cargo run -p p2p-cli -- smoke
 ```
 
+Fix a captured panic (uses a small synthetic project with a seeded bug; your folder is only copied, never modified):
+
+```powershell
+cargo run -p p2p-cli -- fix --incident fixtures/inventory-bug.incident.json --project fixtures/inventory-bug
+```
+
+The result is `.p2p/reports/<fingerprint>/report.md` and `fix.patch`. A fix is only labelled *verified* if the harness itself saw a failing regression test, then a passing full test suite on the final code.
+
 ## Workspace layout
 
 - `crates/p2p-capture` - panic hook, incident JSON, redaction
@@ -45,6 +53,7 @@ Everything in this repository was written during the event (Oct 26 - Nov 4, 2026
 | 2026-10-26 | Day 1: `p2p-agent` Responses API client (`POST /v1/responses`) with flat tool schemas, parallel `function_call` handling and a `p2p smoke` command that runs a one-tool round trip against Muse Spark. Verified live: `muse-spark-1.3` issues parallel tool calls and accepts its own output items echoed back. |
 | 2026-10-26 | Day 1: `p2p-capture` panic hook that saves a structured incident as JSON (message, location, backtrace, context, SHA-256 fingerprint). Redaction (keys, tokens, JWTs, private keys, emails, passwords, home-directory user names) runs before anything is saved; unit and end-to-end tests included. |
 | 2026-10-26 | Day 1: `.gitattributes` (LF everywhere). Local sandbox in `p2p-agent`: a temp-directory copy of the project (no `.env`, keys, `target/` or `.git`), path-escape guard, exact search/replace edits, `cargo test` with a scrubbed environment (no `MODEL_API_KEY`), a timeout that kills the process tree, a red/green-aware outcome (`TestsFailed` vs `BuildFailed`), a git-style `.patch` generated from the sandbox and checked with `git apply --check` against the untouched original. |
+| 2026-10-26 | Day 1: the agent loop. Muse Spark gets tools (`list_files`, `read_file`, `write_file`, `edit_file`, `run_tests`, `write_report`) and works inside the sandbox; the loop is generic over a `Model` trait so it is tested offline with a scripted model. Source is redacted before the model sees it. The harness records every test run and rejects a `fixed` report unless it saw a failing regression test and then a passing full suite on the final code. Markdown incident report + `fix.patch` output, `p2p fix` command, and a synthetic fixture project with a seeded bug. |
 
 ## License
 

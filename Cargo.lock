@@ -960,6 +960,8 @@ dependencies = [
  "anyhow",
  "clap",
  "p2p-agent",
+ "p2p-capture",
+ "serde_json",
  "tokio",
 ]
 

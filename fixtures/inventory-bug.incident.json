@@ -1,0 +1,12 @@
+{
+  "fingerprint": "5f1c0a9e3b7d2c44",
+  "timestamp_ms": 1793000000000,
+  "message": "attempt to divide by zero",
+  "location": { "file": "src/lib.rs", "line": 6, "column": 5 },
+  "thread": "main",
+  "backtrace": "   0: core::panicking::panic_fmt\n   1: core::panicking::panic_const::panic_const_div_by_zero\n   2: inventory::average_price_cents\n             at ./src/lib.rs:6:5\n   3: inventory::main\n             at ./src/main.rs:4:29\n   4: std::rt::lang_start\n",
+  "context": {
+    "app_version": "0.1.0",
+    "scenario": "report for an empty shelf"
+  }
+}

@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -70,6 +71,22 @@ impl ModelResponse {
     }
 }
 
+/// Anything that can answer one turn of the conversation. The agent loop is generic over this,
+/// so tests can use a scripted fake and a local open-weights backend can be added later.
+pub trait Model {
+    fn create(
+        &self,
+        input: &[Value],
+        tools: &[Value],
+    ) -> impl Future<Output = Result<ModelResponse>> + Send;
+}
+
+impl Model for ResponsesClient {
+    async fn create(&self, input: &[Value], tools: &[Value]) -> Result<ModelResponse> {
+        self.request(input, tools).await
+    }
+}
+
 /// Build a `function_call_output` item answering one tool call.
 pub fn function_output(call_id: &str, output: &str) -> Value {
     json!({ "type": "function_call_output", "call_id": call_id, "output": output })
@@ -88,7 +105,7 @@ impl ResponsesClient {
     }
 
     /// Send the whole conversation so far (`input`) plus tool definitions.
-    pub async fn create(&self, input: &[Value], tools: &[Value]) -> Result<ModelResponse> {
+    pub async fn request(&self, input: &[Value], tools: &[Value]) -> Result<ModelResponse> {
         let body = json!({
             "model": self.cfg.model,
             "input": input,

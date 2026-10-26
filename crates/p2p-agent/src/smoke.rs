@@ -49,7 +49,7 @@ pub async fn run(client: &ResponsesClient) -> Result<()> {
     })];
 
     for turn in 1..=MAX_TURNS {
-        let resp = client.create(&input, &tools()).await?;
+        let resp = client.request(&input, &tools()).await?;
         let calls = resp.function_calls()?;
         println!("\n--- turn {turn} (response {}) ---", resp.id);
 
