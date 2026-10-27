@@ -4,6 +4,30 @@ Panic-to-Patch is a Rust crate and agent that catches crashes, reproduces the bu
 
 > Entry for the **Meta Global AI Developer Hackathon** (Indie track, theme "Push the Frontier").
 
+## About
+
+**Panic-to-Patch turns a crash into a *verified* fix.** When an app crashes, it captures the error (secrets removed), lets a Meta Muse Spark agent reproduce the bug with a failing test in a throwaway copy of your project, patches it, and re-runs the tests itself. You get a `.patch` file and a Markdown report. Your working tree is never modified.
+
+**What is different:** most AI coding tools return a plausible suggestion. Here the AI cannot simply claim success. The harness records every test run and only labels a fix *verified* if a regression test failed before the patch and the full suite passes on the final code, and it checks that the patch applies cleanly to your untouched project.
+
+**Where it works today:** Rust projects (a `Cargo.toml`), on a developer machine or in CI. It is a developer tool, not something that patches production. Limits: Rust panics only, the project needs runnable tests, and the local sandbox protects your files, not your machine (AI-written test code still runs with your privileges). Only a small synthetic project has been through the full loop so far (see the [sample report](docs/sample-report.md)). The capture hook is not yet connected to `p2p fix` end to end.
+
+**Use it in a project:**
+
+```rust
+// In main(): add p2p-capture as a path or git dependency.
+p2p_capture::install("incidents");
+```
+
+```powershell
+# After a crash, an incident JSON appears in incidents/. Then:
+p2p fix --incident incidents/<file>.json --project .
+# Review .p2p/reports/<fingerprint>/report.md, then apply the patch yourself:
+git apply .p2p/reports/<fingerprint>/fix.patch
+```
+
+**How it compares** (approximate; these tools change quickly): error trackers such as Sentry record the crash but stop there. Autofix-style tools (Dependabot, GitHub Copilot Autofix) propose changes for alerts. General coding agents (SWE-agent, Devin and similar) start from an issue description. Panic-to-Patch starts from a real crash, always reproduces it with a failing test first, and ships proof of the fix.
+
 ## How it works
 
 1. **Capture** - a panic hook (plus `tracing`) saves a structured incident with a backtrace.
