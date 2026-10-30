@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+# Modal
+.modal/
+# Video / datasets / artefactos
+*.mp4
+*.mov
+*.mkv
+assets/demo*.mp4
+jobs/
+runs/
+*.glb
+*.gltf
+*.usdz
+*.obj
+*.ply
+# Checkpoints SAM (se montan por volumen, no se versionan)
+*.pt
+*.pth
+/models/
+# Node / web
+node_modules/
+dist/
+build/
+.next/
+# OS / editores
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+# Env
+.env
+.env.*
+!.env.example

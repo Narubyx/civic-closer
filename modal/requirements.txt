@@ -1,0 +1,14 @@
+# Deps reales del Paso 1 (Python 3.11). Sin paquetes ficticios:
+# SAM 3.1 / SAM 2 se resuelven por checkpoint (vars SAM31_CHECKPOINT / SAM2_CHECKPOINT)
+# y el fallback SAM ViT-H + flujo óptico siempre funciona con esta lista.
+modal>=0.66
+fastapi>=0.111
+uvicorn>=0.30
+pydantic>=2.7
+python-multipart>=0.0.9
+opencv-python-headless>=4.9,<5
+numpy>=1.26,<2
+pillow>=10.3
+torch>=2.3,<2.6
+torchvision>=0.18,<0.21
+segment-anything>=1.0
