@@ -95,7 +95,12 @@ PIP_PACKAGES = (
 app = modal.App("voxel-sam-ar-ingest")
 image = modal.Image.debian_slim(python_version="3.11").pip_install(*PIP_PACKAGES)
 volume = modal.Volume.from_name("voxel-sam-ar-jobs", create_if_missing=True)
+models_volume = modal.Volume.from_name("voxel-sam-ar-models", create_if_missing=True)
 JOBS_ROOT = "/jobs/jobs"
+# GPU del Segmenter. Default A10G (requiere método de pago en Modal).
+# Para smoke test CPU sin tarjeta: VOXEL_MODAL_GPU=CPU|none|"" (vacío = CPU).
+_MODAL_GPU_RAW = os.environ.get("VOXEL_MODAL_GPU", "A10G").strip()
+MODAL_GPU: str | None = None if _MODAL_GPU_RAW.lower() in ("", "cpu", "none", "0") else _MODAL_GPU_RAW
 
 # ---------------------------------------------------------------------------
 # Esquemas API
@@ -562,11 +567,11 @@ class SamVideoAdapter:
 
 @app.cls(
     image=image,
-    gpu="A10G",
-    volumes={JOBS_ROOT.rsplit("/", 1)[0]: volume},
+    gpu=MODAL_GPU,
+    volumes={"/jobs": volume, "/models": models_volume},
     timeout=900,
-    allow_concurrent_inputs=1,
 )
+@modal.concurrent(max_inputs=1)
 class Segmenter:
     @modal.enter()
     def load_model(self) -> None:
@@ -785,7 +790,7 @@ def list_job(job_id: str) -> dict[str, Any]:
     return {"job_id": sanitize_job_id(job_id), "files": files}
 
 
-@app.function(image=image)
+@app.function(image=image, volumes={"/models": models_volume})
 @modal.asgi_app()
 def fastapi_app() -> FastAPI:
     return web_app
