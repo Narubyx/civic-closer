@@ -1,4 +1,4 @@
-"""VOXEL-SAM AR — Fase 2: extracción geométrica (Baseten + fallback)."""
+"""VOXEL-SAM AR — Phase 2: geometric extraction (Baseten + fallback)."""
 
 from baseten.schema import GeometryEstimate
 

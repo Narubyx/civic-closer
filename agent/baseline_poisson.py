@@ -1,7 +1,7 @@
-"""VOXEL-SAM AR — Fase 3, ciclo 0: baseline determinista.
+"""VOXEL-SAM AR — Phase 3, cycle 0: deterministic baseline.
 
-Usa faces si existen; si no, Poisson con parámetros conservadores. Repara,
-audita y exporta candidate.glb + report.json. Cumple el contrato de candidato.
+Uses faces when present; otherwise Poisson with conservative parameters. Repairs,
+audits and exports candidate.glb + report.json. Follows the candidate contract.
 """
 
 import json

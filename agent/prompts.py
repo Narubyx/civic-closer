@@ -1,8 +1,8 @@
-"""VOXEL-SAM AR — Fase 3: prompts del agente de malla + extracción de código.
+"""VOXEL-SAM AR — Phase 3: mesh-agent prompts + code extraction.
 
-El modelo recibe el resumen geométrico + el historial de ciclos (stderr y
-MeshReport) y debe devolver EXCLUSIVAMENTE un script Python ejecutable que use
-`mesh_tools`. Sin explicaciones fuera del código.
+The model receives the geometry summary + the cycle history (stderr and
+MeshReport) and must return EXCLUSIVELY an executable Python script using
+`mesh_tools`. No explanations outside the code.
 """
 
 from __future__ import annotations
@@ -14,18 +14,18 @@ from typing import Any
 
 try:
     from agent.mesh_tools import CANDIDATE_CONTRACT
-except ImportError:  # ejecución con cwd=agent/
+except ImportError:  # run with cwd=agent/
     from mesh_tools import CANDIDATE_CONTRACT
 
 MAX_CYCLES = 10
 STDERR_TAIL = 2000
 
-SYSTEM_PROMPT = """Eres un ingeniero de geometría 3D autónomo. Escribes scripts Python que convierten
-una nube de vértices (`geometry.json`) en una malla estanca (watertight) lista para AR.
+SYSTEM_PROMPT = """You are an autonomous 3D geometry engineer. You write Python scripts that turn
+a vertex cloud (`geometry.json`) into a watertight mesh ready for AR.
 
 {CANDIDATE_CONTRACT}
 
-API disponible (módulo mesh_tools, ya importable):
+Available API (mesh_tools module, already importable):
 - load_inputs(workdir) -> (verts, normals|None, faces|None, meta)
 - build_from_faces(verts, faces) -> mesh
 - triangulate(points, normals=None, method="poisson"|"ball_pivoting"|"alpha", **params) -> mesh
@@ -37,26 +37,26 @@ API disponible (módulo mesh_tools, ya importable):
 - check(mesh) -> MeshReport(ok, errors[], stats{})
 - save_glb(mesh, path), summarize_inputs(workdir)
 
-DIRECTORIO DE TRABAJO: Path(__file__).parent (úsalo; prohibidas rutas absolutas).
-ÉXITO: report.ok == true con 0 errores.
+WORKING DIRECTORY: Path(__file__).parent (use it; absolute paths forbidden).
+SUCCESS: report.ok == true with 0 errors.
 
-ESCALERA DE PARÁMETROS (sigue este orden salvo que el historial indique otra cosa):
-1. Si hay faces: build_from_faces + repair(max_iters=3) + check.
+PARAMETER LADDER (follow this order unless history says otherwise):
+1. If faces exist: build_from_faces + repair(max_iters=3) + check.
 2. Poisson depth=8, density_quantile=0.05 + repair + check.
 3. Poisson depth=10, linear_fit=true + repair(5) + check.
 4. Ball pivoting radii_scale=2 + repair + check.
 5. Ball pivoting radii_scale=4, normal_radius_scale=6 + repair + check.
 6. Alpha alpha_scale=4 + repair + check.
-7. Alpha alpha_scale=8 + repair + taubin suave + check.
-8. Mejor método hasta ahora + repair(5) + taubin(iterations=20) + check.
-9. Último intento: método ganador con parámetros más agresivos + repair(5).
+7. Alpha alpha_scale=8 + repair + gentle taubin + check.
+8. Best method so far + repair(5) + taubin(iterations=20) + check.
+9. Last attempt: winning method with more aggressive parameters + repair(5).
 
-REGLAS DE SALIDA (estrictas):
-- Devuelve SOLO código Python ejecutable. Sin markdown, sin explicaciones.
-- El script debe terminar escribiendo candidate.glb + report.json e imprimiendo el report.
-- Si el error es de sintaxis/import, corrige el código, no los parámetros.
-- Si hay huecos: sube repair/max_iters o cambia de método según la escalera.
-- Si hay no-manifold/degeneradas: repair + taubin ligero, evita alpha_scale extremo.
+OUTPUT RULES (strict):
+- Return ONLY executable Python code. No markdown, no explanations.
+- The script must finish by writing candidate.glb + report.json and printing the report.
+- On syntax/import errors, fix the code, not the parameters.
+- On holes: raise repair/max_iters or switch methods per the ladder.
+- On non-manifold/degenerate: repair + light taubin, avoid extreme alpha_scale.
 """.replace("{CANDIDATE_CONTRACT}", CANDIDATE_CONTRACT)
 
 
@@ -74,29 +74,29 @@ def build_user_prompt(
     history: list[dict[str, Any]],
     cycle: int,
 ) -> str:
-    """Construye el prompt del ciclo con resumen + historial de intentos."""
+    """Builds the cycle prompt with summary + attempt history."""
     lines = [
-        f"CICLO {cycle}/{MAX_CYCLES - 1} (el ciclo 0 fue el baseline determinista).",
-        "RESUMEN GEOMÉTRICO:",
+        f"CYCLE {cycle}/{MAX_CYCLES - 1} (cycle 0 was the deterministic baseline).",
+        "GEOMETRY SUMMARY:",
         json.dumps(geometry_summary, indent=2, sort_keys=True),
         "",
     ]
     if not history:
-        lines.append("Sin intentos previos del modelo. Empieza por la escalera (paso 1-2).")
+        lines.append("No prior model attempts. Start with the ladder (steps 1-2).")
     else:
-        lines.append("HISTORIAL DE INTENTOS (más reciente al final):")
+        lines.append("ATTEMPT HISTORY (most recent last):")
         for h in history:
             lines.append(
-                f"--- ciclo {h.get('cycle')} exit={h.get('exit_code')} "
+                f"--- cycle {h.get('cycle')} exit={h.get('exit_code')} "
                 f"ok={h.get('report', {}).get('ok')} "
-                f"errores={h.get('report', {}).get('errors', [])} "
+                f"errors={h.get('report', {}).get('errors', [])} "
                 f"stats={json.dumps(h.get('report', {}).get('stats', {}), sort_keys=True)}"
             )
             if h.get("stderr_tail"):
                 lines.append(f"stderr:\n{_shorten(str(h['stderr_tail']))}")
     lines += [
         "",
-        "Escribe el script Python completo del siguiente intento. SOLO código.",
+        "Write the complete Python script for the next attempt. CODE ONLY.",
     ]
     return "\n".join(lines)
 
@@ -105,16 +105,16 @@ _FENCE_RE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL | re.IGNOREC
 
 
 def extract_code(text: str) -> str:
-    """Extrae código Python de la respuesta (tolera fences) y valida sintaxis."""
+    """Extracts Python code from the reply (tolerates fences) and checks syntax."""
     if not text or not text.strip():
-        raise PromptError("Respuesta vacía del modelo.")
+        raise PromptError("Empty model reply.")
     match = _FENCE_RE.search(text)
     code = match.group(1) if match else text
     code = code.strip()
     if not code:
-        raise PromptError("Sin código extraíble en la respuesta.")
+        raise PromptError("No extractable code in the reply.")
     try:
         ast.parse(code)
     except SyntaxError as exc:
-        raise PromptError(f"Código con sintaxis inválida: {exc}") from exc
+        raise PromptError(f"Code with invalid syntax: {exc}") from exc
     return code + "\n"

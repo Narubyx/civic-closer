@@ -1,22 +1,22 @@
-"""VOXEL-SAM AR — Paso 1: ingesta y segmentación 360° en Modal (GPU) + FastAPI + SAM.
+"""VOXEL-SAM AR — Step 1: 360° ingestion and segmentation on Modal (GPU) + FastAPI + SAM.
 
-Flujo:
-  1. Cliente sube un .mp4 360° + punto inicial (x, y) del primer frame.
-  2. El backend decodifica el video con OpenCV, inicializa SAM con ese punto,
-     trackea el objeto a lo largo del video y selecciona N keyframes.
-  3. Cada keyframe se exporta como PNG con el objeto sobre fondo negro
-     (canal alfa purgado) + máscara binaria + bbox. Los artefactos se
-     persisten en un modal.Volume bajo jobs/{job_id}/ y se devuelven en JSON.
+Flow:
+  1. Client uploads a 360° .mp4 + initial point (x, y) on the first frame.
+  2. The backend decodes the video with OpenCV, seeds SAM with that point,
+     tracks the object across the video and selects N keyframes.
+  3. Each keyframe is exported as PNG with the object on a black background
+     (alpha channel purged) + binary mask + bbox. Artifacts persist to a
+     modal.Volume under jobs/{job_id}/ and are returned as JSON.
 
-Resolución del backend SAM (en orden, sin placeholders):
-  1. "sam3" ......... rueda del hackatón (env SAM3_MODULE + fichero SAM31_CHECKPOINT).
-  2. "sam2" ......... predictor de video SAM 2 (fichero SAM2_CHECKPOINT).
-  3. "sam_vith_optflow" SAM ViT-H clásico por frame + tracking Lucas-Kanade.
-  4. "grabcut_optflow" GrabCut + Lucas-Kanade (último recurso sin pesos).
+SAM backend resolution (in order, no placeholders):
+  1. "sam3" ......... hackathon wheel (env SAM3_MODULE + SAM31_CHECKPOINT file).
+  2. "sam2" ......... SAM 2 video predictor (SAM2_CHECKPOINT file).
+  3. "sam_vith_optflow" classic per-frame SAM ViT-H + Lucas-Kanade tracking.
+  4. "grabcut_optflow" GrabCut + Lucas-Kanade (last resort, no weights).
 
-Despliegue:
+Deploy:
   modal deploy modal/app.py
-Prueba local (usa GPU remota):
+Local test (uses remote GPU):
   modal run modal/app.py --video ./assets/demo.mp4 --x 320 --y 240
 """
 
@@ -42,7 +42,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
-# Configuración
+# Configuration
 # ---------------------------------------------------------------------------
 
 logging.basicConfig(level=logging.INFO)
@@ -75,9 +75,9 @@ MAX_VIDEO_BYTES = MAX_VIDEO_MB * 1024 * 1024
 MAX_FRAMES = _env_int("MAX_FRAMES", 1500)
 TARGET_SHORT_SIDE = _env_int("TARGET_SHORT_SIDE", 720)
 DEFAULT_NUM_KEYFRAMES = 24
-MAX_SAM_CALLS = _env_int("MAX_SAM_CALLS", 128)  # tope de inferencias SAM por video
-FLOW_WINDOW = _env_int("FLOW_WINDOW", 21)  # ventana LK del tracker
-SHARPNESS_WINDOW = _env_int("SHARPNESS_WINDOW", 4)  # búsqueda local ±frames
+MAX_SAM_CALLS = _env_int("MAX_SAM_CALLS", 128)  # cap on SAM inferences per video
+FLOW_WINDOW = _env_int("FLOW_WINDOW", 21)  # LK tracker window
+SHARPNESS_WINDOW = _env_int("SHARPNESS_WINDOW", 4)  # local ±frames search
 
 PIP_PACKAGES = (
     "fastapi>=0.111",
@@ -97,22 +97,22 @@ image = modal.Image.debian_slim(python_version="3.11").pip_install(*PIP_PACKAGES
 volume = modal.Volume.from_name("voxel-sam-ar-jobs", create_if_missing=True)
 models_volume = modal.Volume.from_name("voxel-sam-ar-models", create_if_missing=True)
 JOBS_ROOT = "/jobs/jobs"
-# GPU del Segmenter. Default A10G (requiere método de pago en Modal).
-# Para smoke test CPU sin tarjeta: VOXEL_MODAL_GPU=CPU|none|"" (vacío = CPU).
+# Segmenter GPU. Default A10G (requires a payment method on Modal).
+# For a cardless CPU smoke test: VOXEL_MODAL_GPU=CPU|none|"" (empty = CPU).
 _MODAL_GPU_RAW = os.environ.get("VOXEL_MODAL_GPU", "A10G").strip()
 MODAL_GPU: str | None = None if _MODAL_GPU_RAW.lower() in ("", "cpu", "none", "0") else _MODAL_GPU_RAW
 
 # ---------------------------------------------------------------------------
-# Esquemas API
+# API schemas
 # ---------------------------------------------------------------------------
 
 
 class KeyframeResult(BaseModel):
-    index: int = Field(description="Índice del frame en el video redimensionado")
-    png_b64: str = Field(description="PNG base64: objeto sobre fondo negro")
-    mask_b64: str = Field(description="PNG base64 en gris: máscara binaria")
-    bbox_xyxy: list[int] = Field(description="[x1, y1, x2, y2] en px redimensionados")
-    sharpness: float = Field(description="Varianza del Laplaciano (mayor = más nítido)")
+    index: int = Field(description="Frame index in the resized video")
+    png_b64: str = Field(description="Base64 PNG: object on black background")
+    mask_b64: str = Field(description="Grayscale base64 PNG: binary mask")
+    bbox_xyxy: list[int] = Field(description="[x1, y1, x2, y2] in resized px")
+    sharpness: float = Field(description="Laplacian variance (higher = sharper)")
 
 
 class SegmentMeta(BaseModel):
@@ -137,20 +137,20 @@ class SegmentResponse(BaseModel):
 
 
 class SegmentB64Request(BaseModel):
-    video_b64: str = Field(description=".mp4 codificado en base64")
-    x: float = Field(description="Coord. x del punto en el frame original (px)")
-    y: float = Field(description="Coord. y del punto en el frame original (px)")
+    video_b64: str = Field(description="Base64-encoded .mp4")
+    x: float = Field(description="Point x coord in the original frame (px)")
+    y: float = Field(description="Point y coord in the original frame (px)")
     num_keyframes: int = Field(default=DEFAULT_NUM_KEYFRAMES, ge=4, le=64)
     job_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
-# Utilidades puras (CPU, testeables sin GPU)
+# Pure utilities (CPU, testable without GPU)
 # ---------------------------------------------------------------------------
 
 
 class VideoError(ValueError):
-    """Error de validación/decodificación del video de entrada."""
+    """Input video validation/decoding error."""
 
 
 def new_job_id(prefix: str = "seg") -> str:
@@ -168,25 +168,25 @@ def sanitize_job_id(job_id: str | None, prefix: str = "seg") -> str:
 
 def decode_video_bytes(video_bytes: bytes) -> bytes:
     if not video_bytes:
-        raise VideoError("Video vacío (0 bytes).")
+        raise VideoError("Empty video (0 bytes).")
     if len(video_bytes) > MAX_VIDEO_BYTES:
         raise VideoError(
-            f"Video de {len(video_bytes) / 1e6:.1f} MB supera el límite de "
-            f"{MAX_VIDEO_MB} MB."
+            f"Video of {len(video_bytes) / 1e6:.1f} MB exceeds the "
+            f"{MAX_VIDEO_MB} MB limit."
         )
-    # Firma ftyp del contenedor MP4/MOV (bytes 4..8). Acepta también WebM (EBML).
+    # ftyp signature of the MP4/MOV container (bytes 4..8). WebM (EBML) accepted too.
     if len(video_bytes) >= 12 and video_bytes[4:8] == b"ftyp":
         return video_bytes
     if len(video_bytes) >= 4 and video_bytes[:4] == b"\x1a\x45\xdf\xa3":
         return video_bytes
-    raise VideoError("El fichero no parece un .mp4/.mov válido (firma ftyp ausente).")
+    raise VideoError("File does not look like a valid .mp4/.mov (missing ftyp signature).")
 
 
 def read_video_frames(video_path: str) -> tuple[list[np.ndarray], float]:
-    """Decodifica el video a frames BGR redimensionados. Devuelve (frames, fps)."""
+    """Decodes the video to resized BGR frames. Returns (frames, fps)."""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        raise VideoError(f"No se pudo abrir el video: {video_path}")
+        raise VideoError(f"Could not open video: {video_path}")
     try:
         fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
         frames: list[np.ndarray] = []
@@ -198,7 +198,7 @@ def read_video_frames(video_path: str) -> tuple[list[np.ndarray], float]:
     finally:
         cap.release()
     if not frames:
-        raise VideoError("El video no contiene frames decodificables.")
+        raise VideoError("Video contains no decodable frames.")
     h0, w0 = frames[0].shape[:2]
     short = min(h0, w0)
     scale = TARGET_SHORT_SIDE / short if short > TARGET_SHORT_SIDE else 1.0
@@ -206,7 +206,7 @@ def read_video_frames(video_path: str) -> tuple[list[np.ndarray], float]:
         new_w, new_h = int(round(w0 * scale)), int(round(h0 * scale))
         frames = [cv2.resize(f, (new_w, new_h), interpolation=cv2.INTER_AREA) for f in frames]
     log.info(
-        "Video decodificado: %d frames %.1f fps %dx%d -> scale %.3f",
+        "Decoded video: %d frames %.1f fps %dx%d -> scale %.3f",
         len(frames),
         fps,
         w0,
@@ -222,7 +222,7 @@ def frame_sharpness(frame_bgr: np.ndarray) -> float:
 
 
 def select_keyframe_indices(total: int, num: int) -> list[int]:
-    """Índices uniformemente espaciados que cubren [0, total-1] (incluye extremos)."""
+    """Evenly spaced indices covering [0, total-1] (endpoints included)."""
     if num >= total:
         return list(range(total))
     return sorted({int(round(i * (total - 1) / (num - 1))) for i in range(num)})
@@ -231,7 +231,7 @@ def select_keyframe_indices(total: int, num: int) -> list[int]:
 def refine_by_sharpness(
     frames: list[np.ndarray], candidates: list[int], window: int = SHARPNESS_WINDOW
 ) -> list[int]:
-    """Mueve cada candidato al frame más nítido en ±window (búsqueda local)."""
+    """Moves each candidate to the sharpest frame within ±window (local search)."""
     if window <= 0:
         return candidates
     gray_cache: dict[int, np.ndarray] = {}
@@ -248,7 +248,7 @@ def refine_by_sharpness(
     for c in candidates:
         lo, hi = max(0, c - window), min(len(frames) - 1, c + window)
         best = max((i for i in range(lo, hi + 1) if i not in used), key=sharp, default=c)
-        # Si la ventana está ocupada, conserva el candidato aunque repita ventana.
+        # If the window is taken, keep the candidate even if the window repeats.
         if best in used:
             best = c
         used.add(best)
@@ -265,7 +265,7 @@ def mask_bbox(mask: np.ndarray) -> list[int]:
 
 
 def composite_black_bg(frame_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """Aplica la máscara y purga el fondo a negro (alfa eliminado)."""
+    """Applies the mask and purges the background to black (alpha removed)."""
     out = np.zeros_like(frame_bgr)
     out[mask] = frame_bgr[mask]
     return out
@@ -274,7 +274,7 @@ def composite_black_bg(frame_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
 def png_to_b64(img: np.ndarray) -> str:
     ok, buf = cv2.imencode(".png", img)
     if not ok:
-        raise RuntimeError("Falló la codificación PNG.")
+        raise RuntimeError("PNG encoding failed.")
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
@@ -283,12 +283,12 @@ def clamp_point(x: float, y: float, w: int, h: int) -> tuple[float, float]:
 
 
 # ---------------------------------------------------------------------------
-# Adaptador SAM con tracking 360°
+# SAM adapter with 360° tracking
 # ---------------------------------------------------------------------------
 
 
 class SamBackendError(RuntimeError):
-    """El backend SAM solicitado no está disponible."""
+    """The requested SAM backend is not available."""
 
 
 SamBackendName = Literal["sam3", "sam2", "sam_vith_optflow", "grabcut_optflow"]
@@ -304,10 +304,10 @@ def available_backends() -> dict[str, bool]:
 
 
 class SamVideoAdapter:
-    """Segmenta + trackea un objeto en video. El backend se elige en `load()`.
+    """Segments + tracks an object in video. The backend is chosen in `load()`.
 
-    `segment_video()` devuelve (masks, backend_name, sam_calls) donde masks[i]
-    es un array bool (H, W) alineado con frames[i].
+    `segment_video()` returns (masks, backend_name, sam_calls) where masks[i]
+    is a bool array (H, W) aligned with frames[i].
     """
 
     def __init__(self, device: str = "cuda") -> None:
@@ -315,7 +315,7 @@ class SamVideoAdapter:
         self.backend: SamBackendName | None = None
         self._predictor: Any = None
 
-    # -- carga ------------------------------------------------------------
+    # -- loading ----------------------------------------------------------
     def load(self, preferred: SamBackendName | None = None) -> SamBackendName:
         order: list[SamBackendName] = (
             [preferred] if preferred else ["sam3", "sam2", "sam_vith_optflow", "grabcut_optflow"]
@@ -327,49 +327,49 @@ class SamVideoAdapter:
             try:
                 getattr(self, f"_load_{name}")()
                 self.backend = name
-                log.info("Backend SAM activo: %s", name)
+                log.info("Active SAM backend: %s", name)
                 return name
             except SamBackendError as exc:
                 errors[name] = str(exc)
                 continue
-        raise SamBackendError(f"Ningún backend SAM disponible: {errors}")
+        raise SamBackendError(f"No SAM backend available: {errors}")
 
     def _load_sam3(self) -> None:
         if not Path(SAM31_CHECKPOINT).exists():
-            raise SamBackendError(f"Checkpoint ausente: {SAM31_CHECKPOINT}")
+            raise SamBackendError(f"Missing checkpoint: {SAM31_CHECKPOINT}")
         try:
             module = __import__(SAM3_MODULE, fromlist=["create_predictor"])
         except ImportError as exc:
-            raise SamBackendError(f"Módulo {SAM3_MODULE!r} no importable: {exc}") from exc
+            raise SamBackendError(f"Module {SAM3_MODULE!r} not importable: {exc}") from exc
         factory = getattr(module, "create_predictor", None)
         if not callable(factory):
-            raise SamBackendError(f"{SAM3_MODULE}.create_predictor no existe.")
+            raise SamBackendError(f"{SAM3_MODULE}.create_predictor does not exist.")
         self._predictor = factory(SAM31_CHECKPOINT, self.device)
 
     def _load_sam2(self) -> None:
         if not Path(SAM2_CHECKPOINT).exists():
-            raise SamBackendError(f"Checkpoint ausente: {SAM2_CHECKPOINT}")
+            raise SamBackendError(f"Missing checkpoint: {SAM2_CHECKPOINT}")
         try:
             from sam2.sam2_video_predictor import SAM2VideoPredictor
         except ImportError as exc:
-            raise SamBackendError(f"Paquete sam2 no importable: {exc}") from exc
-        # from_pretrained acepta ruta local al checkpoint en builds recientes;
-        # si falla, el error se propaga como backend no disponible.
+            raise SamBackendError(f"Package sam2 not importable: {exc}") from exc
+        # from_pretrained accepts a local checkpoint path in recent builds;
+        # on failure the error propagates as backend unavailable.
         try:
             self._predictor = SAM2VideoPredictor.from_pretrained(SAM2_CHECKPOINT)
-        except Exception as exc:  # noqa: BLE001 - cualquier fallo invalida el backend
-            raise SamBackendError(f"No se pudo cargar SAM2: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 - any failure invalidates the backend
+            raise SamBackendError(f"Could not load SAM2: {exc}") from exc
 
     def _load_sam_vith_optflow(self) -> None:
         if not Path(SAM_VITH_CHECKPOINT).exists():
-            raise SamBackendError(f"Checkpoint ausente: {SAM_VITH_CHECKPOINT}")
+            raise SamBackendError(f"Missing checkpoint: {SAM_VITH_CHECKPOINT}")
         try:
             import torch
             from segment_anything import SamPredictor, sam_model_registry
         except ImportError as exc:
-            raise SamBackendError(f"segment-anything no importable: {exc}") from exc
+            raise SamBackendError(f"segment-anything not importable: {exc}") from exc
         if SAM_MODEL_TYPE not in sam_model_registry:
-            raise SamBackendError(f"SAM_MODEL_TYPE inválido: {SAM_MODEL_TYPE!r}")
+            raise SamBackendError(f"Invalid SAM_MODEL_TYPE: {SAM_MODEL_TYPE!r}")
         model = sam_model_registry[SAM_MODEL_TYPE](checkpoint=SAM_VITH_CHECKPOINT)
         device = self.device if torch.cuda.is_available() else "cpu"
         model.to(device=device)
@@ -377,14 +377,14 @@ class SamVideoAdapter:
         self._predictor = SamPredictor(model)
 
     def _load_grabcut_optflow(self) -> None:
-        self._predictor = "grabcut"  # sin pesos; algoritmo clásico de OpenCV
+        self._predictor = "grabcut"  # no weights; classic OpenCV algorithm
 
-    # -- segmentación ------------------------------------------------------
+    # -- segmentation -----------------------------------------------------
     def segment_video(
         self, frames: list[np.ndarray], x: float, y: float
     ) -> tuple[list[np.ndarray], SamBackendName, int]:
         if self.backend is None:
-            raise SamBackendError("Adapter sin cargar: llama a load() primero.")
+            raise SamBackendError("Adapter not loaded: call load() first.")
         h, w = frames[0].shape[:2]
         x, y = clamp_point(x, y, w, h)
         if self.backend == "sam3":
@@ -398,10 +398,10 @@ class SamVideoAdapter:
     def _run_sam3(
         self, frames: list[np.ndarray], x: float, y: float
     ) -> tuple[list[np.ndarray], SamBackendName, int]:
-        """SAM 3.1 del hackatón. Soporta dos formas de predictor (duck-typing).
+        """Hackathon SAM 3.1. Supports two predictor shapes (duck-typing).
 
-        Forma A (video nativo): predictor.segment_video(frames, x, y) -> masks.
-        Forma B (estilo SAM2): init_state/add_points/propagate sobre dir de frames.
+        Shape A (native video): predictor.segment_video(frames, x, y) -> masks.
+        Shape B (SAM2-style): init_state/add_points/propagate over a frames dir.
         """
         pred = self._predictor
         h, w = frames[0].shape[:2]
@@ -410,14 +410,14 @@ class SamVideoAdapter:
             masks = segment_video(frames, float(x), float(y))
             masks = [np.asarray(m).astype(bool).reshape(h, w) for m in masks]
             if len(masks) != len(frames):
-                raise SamBackendError("sam3 devolvió nº de máscaras distinto al de frames.")
+                raise SamBackendError("sam3 returned a mask count different from the frame count.")
             return masks, "sam3", len(frames)
-        # Forma B: API estilo video predictor.
+        # Shape B: video-predictor-style API.
         init_state = getattr(pred, "init_state", None)
         add_points = getattr(pred, "add_points", getattr(pred, "add_new_points", None))
         propagate = getattr(pred, "propagate", getattr(pred, "propagate_in_video", None))
         if not (callable(init_state) and callable(add_points) and callable(propagate)):
-            raise SamBackendError("Predictor sam3 sin API reconocible (ni segment_video ni init/add/propagate).")
+            raise SamBackendError("sam3 predictor without recognizable API (neither segment_video nor init/add/propagate).")
         with tempfile.TemporaryDirectory(prefix="sam3_frames_") as tmp:
             for i, f in enumerate(frames):
                 cv2.imwrite(str(Path(tmp) / f"{i:05d}.jpg"), f)
@@ -426,7 +426,7 @@ class SamVideoAdapter:
             masks: list[np.ndarray] = [np.zeros((h, w), dtype=bool) for _ in frames]
             calls = 0
             for out in propagate(state):
-                # Acepta tuplas (frame_idx, masks) o dicts {frame_idx: mask}.
+                # Accepts tuples (frame_idx, masks) or dicts {frame_idx: mask}.
                 if isinstance(out, dict):
                     items = out.items()
                 elif isinstance(out, (tuple, list)) and len(out) >= 2:
@@ -478,7 +478,7 @@ class SamVideoAdapter:
     def _track_points_lk(
         self, frames: list[np.ndarray], x: float, y: float
     ) -> list[tuple[float, float]]:
-        """Propaga el punto inicial por todo el video con Lucas-Kanade."""
+        """Propagates the initial point across the video with Lucas-Kanade."""
         h, w = frames[0].shape[:2]
         points = [(float(x), float(y))]
         prev_gray = cv2.cvtColor(frames[0], cv2.COLOR_BGR2GRAY)
@@ -496,7 +496,7 @@ class SamVideoAdapter:
             if next_pts is not None and int(status[0, 0]) == 1:
                 nx, ny = clamp_point(float(next_pts[0, 0, 0]), float(next_pts[0, 0, 1]), w, h)
             else:
-                nx, ny = points[-1]  # punto perdido: congela última posición válida
+                nx, ny = points[-1]  # lost point: freeze last valid position
             points.append((nx, ny))
             prev_gray, prev_pts = gray, np.array([[[nx, ny]]], dtype=np.float32)
         return points
@@ -509,7 +509,7 @@ class SamVideoAdapter:
         pred = self._predictor
         h, w = frames[0].shape[:2]
         tracked = self._track_points_lk(frames, x, y)
-        # Tope de inferencias: submuestrea y rellena por vecino más cercano.
+        # Inference cap: subsample and fill with nearest neighbor.
         stride = max(1, len(frames) // MAX_SAM_CALLS)
         sam_indices = list(range(0, len(frames), stride))
         masks: dict[int, np.ndarray] = {}
@@ -532,13 +532,13 @@ class SamVideoAdapter:
     def _run_grabcut_optflow(
         self, frames: list[np.ndarray], x: float, y: float
     ) -> tuple[list[np.ndarray], SamBackendName, int]:
-        """Último recurso sin pesos: GrabCut inicializado en el punto + LK."""
+        """Last resort without weights: GrabCut seeded at the point + LK."""
         h, w = frames[0].shape[:2]
         tracked = self._track_points_lk(frames, x, y)
         stride = max(1, len(frames) // MAX_SAM_CALLS)
         sam_indices = list(range(0, len(frames), stride))
         masks: dict[int, np.ndarray] = {}
-        box = 80  # semi-lado inicial del rectángulo GrabCut
+        box = 80  # initial GrabCut rectangle half-side
         for i in sam_indices:
             px, py = tracked[i]
             x1, y1 = int(max(0, px - box)), int(max(0, py - box))
@@ -552,7 +552,7 @@ class SamVideoAdapter:
             except cv2.error:
                 gc_mask[:, :] = cv2.GC_PR_BGD
             masks[i] = np.isin(gc_mask, (cv2.GC_FGD, cv2.GC_PR_FGD))
-            # Adapta la ventana al bbox resultante para el siguiente keyframe.
+            # Adapt the window to the resulting bbox for the next keyframe.
             ys, xs = np.nonzero(masks[i])
             if xs.size > 0:
                 box = int(max(24, max(xs.max() - xs.min(), ys.max() - ys.min()) // 2 + 12))
@@ -561,7 +561,7 @@ class SamVideoAdapter:
 
 
 # ---------------------------------------------------------------------------
-# Función GPU en Modal
+# GPU function on Modal
 # ---------------------------------------------------------------------------
 
 
@@ -580,7 +580,7 @@ class Segmenter:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         self.adapter = SamVideoAdapter(device=device)
         backend = self.adapter.load()
-        log.info("Segmenter listo: backend=%s device=%s", backend, device)
+        log.info("Segmenter ready: backend=%s device=%s", backend, device)
 
     @modal.method()
     def backend_name(self) -> str:
@@ -611,26 +611,26 @@ class Segmenter:
                 pass
 
         h, w = frames[0].shape[:2]
-        # El punto llega en coords del video ORIGINAL; como read_video_frames
-        # ya redimensionó, reescalamos el punto con la misma escala. Para ello
-        # recuperamos la escala comparando: TARGET_SHORT_SIDE / short_original.
-        # Simplificación exacta: el cliente envía coords ya en el espacio
-        # decodificado si desconoce el resize; aquí re-escalamos por si el
-        # video original era mayor (detectado vía metadata del primer frame
-        # sin redimensionar es imposible post-hoc, así que documentamos:
-        # x,y se interpretan en el espacio del frame redimensionado si exceden
-        # sus dimensiones se sujetan (clamp). Para máxima precisión el cliente
-        # puede dividir por scale = TARGET_SHORT_SIDE/min(H0,W0).
+        # The point arrives in ORIGINAL video coords; since read_video_frames
+        # already resized, we rescale the point with the same factor, recovered
+        # as: TARGET_SHORT_SIDE / short_original.
+        # Exact simplification: clients send coords already in decoded space
+        # when unaware of the resize; here we rescale in case the original
+        # video was larger (post-hoc detection via first-frame metadata is
+        # impossible without resizing, so we document it instead):
+        # x,y are interpreted in resized-frame space; out-of-range values are
+        # clamped. For max precision the client can divide by
+        # scale = TARGET_SHORT_SIDE/min(H0,W0).
         xs, ys = clamp_point(float(x), float(y), w, h)
-        # Si el cliente envió coords del original y el video se redujo, las
-        # coords excederían (w,h) y el clamp las llevaría al borde: heurística
-        # de corrección — si x>=w o y>=h, reescala por w/max(x*1.0, w).
-        # (Mantiene compatibilidad con ambos espacios de coordenadas.)
+        # If the client sent original-space coords and the video shrank, the
+        # coords would exceed (w,h) and clamping would snap them to the edge:
+        # correction heuristic — if x>=w or y>=h, rescale by w/max(x*1.0, w).
+        # (Keeps compatibility with both coordinate spaces.)
         if float(x) >= w or float(y) >= h:
             s = min(w / max(float(x), 1.0), h / max(float(y), 1.0))
-            # Deshace el clamp y aplica la escala estimada del resize.
+            # Undo the clamp and apply the estimated resize scale.
             xs, ys = clamp_point(float(x) * s * 0.999, float(y) * s * 0.999, w, h)
-            log.info("Punto re-escalado del espacio original (s=%.3f)", s)
+            log.info("Point rescaled from original space (s=%.3f)", s)
 
         masks, backend, sam_calls = self.adapter.segment_video(frames, xs, ys)
 
@@ -686,10 +686,10 @@ class Segmenter:
 
 
 # ---------------------------------------------------------------------------
-# API HTTP (FastAPI servida por Modal)
+# HTTP API (FastAPI served by Modal)
 # ---------------------------------------------------------------------------
 
-web_app = FastAPI(title="VOXEL-SAM AR — Ingesta 360°", version="1.0.0")
+web_app = FastAPI(title="VOXEL-SAM AR — 360° Ingest", version="1.0.0")
 web_app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -711,32 +711,32 @@ def health() -> dict[str, Any]:
 
 @web_app.get("/ready")
 def ready() -> dict[str, Any]:
-    """Comprueba que la GPU responde (puede tardar en frío ~60-120 s)."""
+    """Checks that the GPU responds (cold start may take ~60-120 s)."""
     try:
         backend = Segmenter().backend_name.remote()
-    except Exception as exc:  # noqa: BLE001 - se reporta como not-ready
-        raise HTTPException(status_code=503, detail=f"GPU no lista: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001 - reported as not-ready
+        raise HTTPException(status_code=503, detail=f"GPU not ready: {exc}") from exc
     return {"ready": True, "sam_backend": backend}
 
 
 def _validate_point(x: float, y: float) -> None:
     if not (np.isfinite(x) and np.isfinite(y)) or x < 0 or y < 0:
-        raise HTTPException(status_code=422, detail="x e y deben ser píxeles finitos >= 0.")
+        raise HTTPException(status_code=422, detail="x and y must be finite pixels >= 0.")
     if x > 16384 or y > 16384:
-        raise HTTPException(status_code=422, detail="x e y exceden el máximo (16384 px).")
+        raise HTTPException(status_code=422, detail="x and y exceed the maximum (16384 px).")
 
 
 @web_app.post("/segment", response_model=SegmentResponse)
 async def segment_multipart(
-    file: UploadFile = File(description="Video .mp4/.mov 360° del objeto"),
-    x: float = Form(description="Coord. x del punto inicial (px)"),
-    y: float = Form(description="Coord. y del punto inicial (px)"),
+    file: UploadFile = File(description="360° .mp4/.mov video of the object"),
+    x: float = Form(description="Initial point x coord (px)"),
+    y: float = Form(description="Initial point y coord (px)"),
     num_keyframes: int = Form(default=DEFAULT_NUM_KEYFRAMES),
     job_id: str | None = Form(default=None),
 ) -> JSONResponse:
     _validate_point(x, y)
     if num_keyframes < 4 or num_keyframes > 64:
-        raise HTTPException(status_code=422, detail="num_keyframes debe estar en [4, 64].")
+        raise HTTPException(status_code=422, detail="num_keyframes must be in [4, 64].")
     try:
         video_bytes = await file.read()
     finally:
@@ -760,7 +760,7 @@ def segment_b64(req: SegmentB64Request) -> JSONResponse:
     try:
         video_bytes = base64.b64decode(req.video_b64, validate=True)
     except (binascii.Error, ValueError) as exc:
-        raise HTTPException(status_code=422, detail="video_b64 no es base64 válido.") from exc
+        raise HTTPException(status_code=422, detail="video_b64 is not valid base64.") from exc
     try:
         decode_video_bytes(video_bytes)
     except VideoError as exc:
@@ -786,7 +786,7 @@ def _list_job_files(job_id: str) -> list[str]:
 def list_job(job_id: str) -> dict[str, Any]:
     files = _list_job_files.remote(job_id)
     if not files:
-        raise HTTPException(status_code=404, detail=f"job_id desconocido: {job_id}")
+        raise HTTPException(status_code=404, detail=f"unknown job_id: {job_id}")
     return {"job_id": sanitize_job_id(job_id), "files": files}
 
 
@@ -797,7 +797,7 @@ def fastapi_app() -> FastAPI:
 
 
 # ---------------------------------------------------------------------------
-# Entrypoint local: modal run modal/app.py --video ./demo.mp4 --x 320 --y 240
+# Local entrypoint: modal run modal/app.py --video ./demo.mp4 --x 320 --y 240
 # ---------------------------------------------------------------------------
 
 

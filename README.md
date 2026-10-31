@@ -1,64 +1,65 @@
 # VOXEL-SAM AR
 
-Pipeline de ingeniería inversa 3D para Realidad Aumentada: graba un video 360° de un
-objeto cotidiano, aísla su geometría, extrae vértices 3D, refina la malla con un agente
-autónomo (feedback loop, máx 10 ciclos) y publica un `.GLB` / `.USDZ` listo para WebAR.
+3D reverse-engineering pipeline for Augmented Reality: record a 360° video of an
+everyday object, isolate its geometry, extract 3D vertices, refine the mesh with
+an autonomous agent (feedback loop, max 10 cycles) and publish a WebAR-ready
+`.GLB` / `.USDZ`.
 
 ```
-.mp4 360° ──▶ [1. Modal GPU: SAM + tracking] ──▶ 24 keyframes fondo negro
+360° .mp4 ──▶ [1. Modal GPU: SAM + tracking] ──▶ 24 black-background keyframes
                     ──▶ [2. Baseten: muse-spark-open-1026] ──▶ geometry.json
-                    ──▶ [3. Agente Muse Spark 1.3 max: Trimesh/Open3D, reintentos] ──▶ model.glb + model.usdz
-                    ──▶ [4. Web Vite + model-viewer] ──▶ QR → AR en el móvil
+                    ──▶ [3. Muse Spark 1.3 max agent: Trimesh/Open3D, retries] ──▶ model.glb + model.usdz
+                    ──▶ [4. Vite web + model-viewer] ──▶ QR → AR on the phone
 ```
 
-## Estado
+## Status
 
-- [x] Fase 0 — Base del repo
-- [x] Fase 1 — `modal/app.py`: FastAPI + Modal GPU + SAM + tracking + 24 keyframes
-- [x] Fase 2 — `baseten/`: `geometry.json` vía `muse-spark-open-1026` + fallback por siluetas
-- [x] Fase 3 — `agent/`: feedback loop watertight (baseline + modelo, ≤10 ciclos, GLB+USDZ)
-- [ ] Fase 4 — `web/` visor WebAR + QR
+- [x] Phase 0 — Repo base
+- [x] Phase 1 — `modal/app.py`: FastAPI + Modal GPU + SAM + tracking + 24 keyframes
+- [x] Phase 2 — `baseten/`: `geometry.json` via `muse-spark-open-1026` + silhouette fallback
+- [x] Phase 3 — `agent/`: watertight feedback loop (baseline + model, ≤10 cycles, GLB+USDZ)
+- [x] Phase 4 — `web/`: Vite console + `model-viewer` viewer + WebAR QR
 
-Plan detallado de archivos: [docs/PLAN.md](docs/PLAN.md).
+Detailed file plan: [docs/PLAN.md](docs/PLAN.md).
 
-## Quickstart — Paso 1 (Modal + SAM)
+## Quickstart — Step 1 (Modal + SAM)
 
-Requisitos: Python 3.11+, cuenta Modal (`pip install modal && modal setup`).
+Requirements: Python 3.11+, Modal account (`pip install modal && modal setup`).
 
 ```bash
-# 1. Dependencias locales (solo para validación de sintaxis / tipos)
+# 1. Local deps (syntax / type checking only)
 pip install -r modal/requirements.txt
 
-# 2. Prueba local del entrypoint (requiere GPU remota de Modal)
+# 2. Local entrypoint test (needs remote Modal GPU)
 modal run modal/app.py --video ./assets/demo.mp4 --x 320 --y 240 --num-keyframes 24
 
-# 3. Despliegue del API
+# 3. Deploy the API
 modal deploy modal/app.py
-# → https://<tu-usuario>--voxel-sam-ar-ingest-fastapi-app.modal.run
+# → https://<your-user>--voxel-sam-ar-ingest-fastapi-app.modal.run
 ```
 
-### Configuración del checkpoint SAM
+### SAM checkpoint configuration
 
-`modal/app.py` resuelve el modelo en este orden (sin placeholders, con fallback real):
+`modal/app.py` resolves the model in this order (no placeholders, real fallback):
 
-1. `SAM3_MODULE` + `SAM31_CHECKPOINT` (rueda `sam3` del hackatón, si existe).
-2. `SAM2_CHECKPOINT` (paquete `sam2`, predictor de video).
-3. SAM ViT-H clásico (`segment_anything`) por frame + tracking por flujo óptico
-   Lucas-Kanade. Este camino siempre funciona con `modal/requirements.txt`.
+1. `SAM3_MODULE` + `SAM31_CHECKPOINT` (hackathon `sam3` wheel, if present).
+2. `SAM2_CHECKPOINT` (`sam2` package, video predictor).
+3. Classic per-frame SAM ViT-H (`segment_anything`) + Lucas-Kanade optical-flow
+   tracking. This path always works with `modal/requirements.txt`.
 
-Variables de entorno (o secreto Modal `voxel-sam-ar`):
+Environment variables (or Modal secret `voxel-sam-ar`):
 
-| Variable | Default | Descripción |
+| Variable | Default | Description |
 |---|---|---|
-| `SAM31_CHECKPOINT` | `/models/sam-3.1/sam31_h.pt` | Checkpoint SAM 3.1 (.pt) |
-| `SAM2_CHECKPOINT` | `/models/sam-2/sam2_h.pt` | Checkpoint SAM 2 (.pt) |
-| `SAM_VITH_CHECKPOINT` | `/models/sam/sam_vit_h_4b8939.pth` | Checkpoint SAM ViT-H |
-| `SAM_MODEL_TYPE` | `vit_h` | `vit_h` / `vit_l` / `vit_b` para SAM clásico |
-| `MAX_VIDEO_MB` | `200` | Tamaño máximo del .mp4 |
-| `MAX_FRAMES` | `1500` | Límite de frames decodificados |
-| `TARGET_SHORT_SIDE` | `720` | Redimensionado del lado corto (velocidad/VRAM) |
+| `SAM31_CHECKPOINT` | `/models/sam-3.1/sam31_h.pt` | SAM 3.1 checkpoint (.pt) |
+| `SAM2_CHECKPOINT` | `/models/sam-2/sam2_h.pt` | SAM 2 checkpoint (.pt) |
+| `SAM_VITH_CHECKPOINT` | `/models/sam/sam_vit_h_4b8939.pth` | SAM ViT-H checkpoint |
+| `SAM_MODEL_TYPE` | `vit_h` | `vit_h` / `vit_l` / `vit_b` for classic SAM |
+| `MAX_VIDEO_MB` | `200` | Max .mp4 size |
+| `MAX_FRAMES` | `1500` | Decoded frames limit |
+| `TARGET_SHORT_SIDE` | `720` | Short-side resize (speed/VRAM) |
 
-## API — Paso 1
+## API — Step 1
 
 ### `GET /health`
 
@@ -69,8 +70,8 @@ curl https://<app>.modal.run/health
 
 ### `POST /segment` (multipart)
 
-Campos: `file` (.mp4), `x` (float, px en frame original), `y` (float),
-`num_keyframes` (default 24, 4–64), `job_id` (opcional).
+Fields: `file` (.mp4), `x` (float, px in original frame), `y` (float),
+`num_keyframes` (default 24, 4–64), `job_id` (optional).
 
 ```bash
 curl -X POST https://<app>.modal.run/segment \
@@ -78,7 +79,7 @@ curl -X POST https://<app>.modal.run/segment \
   -F "x=320" -F "y=240" -F "num_keyframes=24"
 ```
 
-Respuesta (resumen):
+Response (summary):
 
 ```json
 {
@@ -91,80 +92,97 @@ Respuesta (resumen):
 }
 ```
 
-Cada `png_b64` es un PNG con el objeto segmentado sobre **fondo negro** (alfa purgado).
-`mask_b64` es la máscara binaria (PNG gris). Los mismos PNG se persisten en el
-`modal.Volume("voxel-sam-ar-jobs")` bajo `jobs/{job_id}/keyframe_XX.png`.
+Each `png_b64` is a PNG with the segmented object on a **black background**
+(purged alpha). `mask_b64` is the binary mask (gray PNG). The same PNGs persist
+to `modal.Volume("voxel-sam-ar-jobs")` under `jobs/{job_id}/keyframe_XX.png`.
 
 ### `POST /segment-b64` (JSON)
 
 ```json
-{"video_b64": "<mp4 en base64>", "x": 320, "y": 240, "num_keyframes": 24}
+{"video_b64": "<base64 mp4>", "x": 320, "y": 240, "num_keyframes": 24}
 ```
 
 ### `GET /jobs/{job_id}`
 
-Lista artefactos persistidos del job (útil para la Fase 2 / Baseten).
+Lists the job's persisted artifacts (useful for Phase 2 / Baseten).
 
-## Quickstart — Paso 2 (geometría 3D)
+## Quickstart — Step 2 (3D geometry)
 
 ```bash
 pip install -r baseten/requirements.txt
 
-# Con Baseten (remoto primario, JSON estricto vía Instructor):
+# With Baseten (primary remote, strict JSON via Instructor):
 export BASETEN_API_KEY=...  # BASETEN_MODEL_NAME default: muse-spark-open-1026
 python -m baseten.infer --keyframes-dir ./keyframes_out/<job_id> --meta ./keyframes_out/<job_id>/meta.json
 
-# Sin clave (fallback determinista por siluetas, numpy+PIL):
+# Without a key (deterministic silhouette fallback, numpy+PIL):
 python -m baseten.infer --keyframes-dir ./keyframes_out/<job_id> --no-remote --height-m 0.20
 # → <keyframes-dir>/geometry.json  {vertices, normals, edges, faces?, confidence, ...}
 ```
 
-Contrato: metros, Y-up, objeto centrado; `vertices[i]` ↔ `normals[i]` unitaria;
-ver [baseten/schema.py](baseten/schema.py). Si el remoto falla o no hay clave,
-el CLI degrada al fallback local con exit 0 (aviso en stderr).
+Contract: meters, Y-up, centered object; `vertices[i]` ↔ unit `normals[i]`;
+see [baseten/schema.py](baseten/schema.py). If remote fails or no key is set,
+the CLI degrades to the local fallback with exit 0 (warning on stderr).
 
-## Quickstart — Paso 3 (feedback loop de malla)
+## Quickstart — Step 3 (mesh feedback loop)
 
 ```bash
 pip install -r agent/requirements.txt
 
-# Baseline determinista (sin modelo): triangular/reparar/auditar/exportar
+# Deterministic baseline (no model): triangulate/repair/audit/export
 python -m agent.loop --geometry ./geometry.json --exec local --max-cycles 1
 
-# Bucle agéntico completo (≤10 ciclos) en Sandbox Modal aislado:
-export META_MODEL_API_KEY=... META_MODEL_BASE_URL=...  # API OpenAI-compatible
+# Full agentic loop (≤10 cycles) in an isolated Modal Sandbox:
+export META_MODEL_API_KEY=... META_MODEL_BASE_URL=...  # OpenAI-compatible API
 python -m agent.loop --geometry ./geometry.json --exec modal --max-cycles 10
 # → agent/runs/<run_id>/{cycle_XX.py, cycle_XX.log, cycle_XX.report.json,
 #                        manifest.json, model.glb, model.usdz}
 ```
 
-El ciclo 0 es el baseline; si falla y hay clave, el modelo recibe
-`stderr` + `MeshReport` y reescribe el script (escalera Poisson → ball pivoting →
-alpha + repair/taubin). El USDZ se autorea como USDA + zip STORED y se revalida
-con `usd-core` cuando está disponible. Exit 0 = malla estanca, 0 errores.
+Cycle 0 is the baseline; if it fails and a key exists, the model receives
+`stderr` + `MeshReport` and rewrites the script (Poisson → ball pivoting →
+alpha + repair/taubin ladder). The USDZ is authored as USDA + STORED zip and
+revalidated with `usd-core` when available. Exit 0 = watertight mesh, 0 errors.
 
-## Estructura
+## Quickstart — Step 4 (WebAR console)
+
+```bash
+cd web
+npm install
+npm run dev              # http://localhost:5173 — open in the browser
+```
+
+The console talks live to Phase 1 (`/health`, `/segment`), shows any Phase 3
+run manifest, and presents the `model-viewer` viewer (GLB + USDZ) with a QR to
+this same page for opening it on the phone and tapping AR. Includes real demo
+artifacts in `web/public/{demo,models}`. Mobile demo details: [web/README.md](web/README.md).
+
+## Layout
 
 ```
 voxel-sam-ar/
   README.md  LICENSE  .gitignore
   docs/PLAN.md
   modal/
-    app.py            # PASO 1 completo
+    app.py            # STEP 1 complete
     requirements.txt
   baseten/
-    schema.py         # PASO 2: contrato GeometryEstimate (Pydantic estricto)
-    infer.py          # PASO 2: cliente Baseten/Instructor + fallback por siluetas
+    schema.py         # STEP 2: GeometryEstimate contract (strict Pydantic)
+    infer.py          # STEP 2: Baseten/Instructor client + silhouette fallback
     requirements.txt
   agent/
-    mesh_tools.py     # PASO 3: triangular/reparar/suavizar/auditar/exportar
-    prompts.py        # PASO 3: prompts + extracción de código del modelo
-    baseline_poisson.py  # PASO 3: ciclo 0 determinista
-    loop.py           # PASO 3: orquestador (local + Modal Sandbox, ≤10 ciclos)
+    mesh_tools.py     # STEP 3: triangulate/repair/smooth/audit/export
+    prompts.py        # STEP 3: prompts + model code extraction
+    baseline_poisson.py  # STEP 3: deterministic cycle 0
+    loop.py           # STEP 3: orchestrator (local + Modal Sandbox, ≤10 cycles)
     requirements.txt
-  web/                # Fase 4 (pendiente)
+  web/                # STEP 4: Vite console + model-viewer + QR (see web/README.md)
 ```
 
-## Roadmap inmediato
+## Full demo flow
 
-1. `web/` (Vite + model-viewer + QR → WebAR).
+1. `modal deploy modal/app.py` → live API (or use the current deployment).
+2. `cd web && npm run dev` → segment your video from stage 2.
+3. `python -m baseten.infer …` + `python -m agent.loop …` → `model.glb`/`.usdz`.
+4. Copy the run into `web/public/` (or point `VITE_ARTIFACTS_URL` at it), reload,
+   scan the QR with the phone and tap AR next to the real object.

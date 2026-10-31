@@ -1,4 +1,4 @@
-"""VOXEL-SAM AR — Fase 3: motor agéntico + feedback loop watertight."""
+"""VOXEL-SAM AR — Phase 3: agentic engine + watertight feedback loop."""
 
 from agent.mesh_tools import MeshReport
 

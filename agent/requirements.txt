@@ -1,6 +1,6 @@
-# Deps de la Fase 3 (Python 3.11).
-# mesh_tools/loop importan pesadas de forma perezosa: el loop local sin
-# ejecución de malla solo necesita openai+httpx; la Sandbox Modal instala todo.
+# Phase 3 deps (Python 3.11).
+# mesh_tools/loop import heavies lazily: a local loop without mesh
+# execution only needs openai+httpx; the Modal Sandbox installs everything.
 open3d
 trimesh[easy]
 scipy

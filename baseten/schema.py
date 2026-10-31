@@ -1,13 +1,13 @@
-"""VOXEL-SAM AR — Fase 2: esquemas estrictos de geometría 3D.
+"""VOXEL-SAM AR — Phase 2: strict 3D geometry schemas.
 
-`GeometryEstimate` es el contrato entre la inferencia (Baseten `muse-spark-open-1026`
-o el fallback determinista por siluetas) y el motor agéntico de la Fase 3.
+`GeometryEstimate` is the contract between inference (Baseten `muse-spark-open-1026`
+or the deterministic silhouette fallback) and the Phase 3 agentic engine.
 
-Convenciones:
-  - Unidades: metros (`units="meters"`).
-  - Marco: Y-up (`coordinate_frame="y_up"`), objeto centrado en el origen.
-  - `vertices[i]` se corresponde con `normals[i]` (normales unitarias).
-  - `edges`/`faces` referencian índices de `vertices` (0-based).
+Conventions:
+  - Units: meters (`units="meters"`).
+  - Frame: Y-up (`coordinate_frame="y_up"`), object centered at the origin.
+  - `vertices[i]` corresponds to `normals[i]` (unit normals).
+  - `edges`/`faces` reference `vertices` indices (0-based).
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ NORMAL_NORM_MIN = 1e-9
 
 
 class GeometryEstimate(BaseModel):
-    """Estimación geométrica 3D de un objeto a partir de keyframes 360°."""
+    """3D geometry estimate of an object from 360° keyframes."""
 
     model_config = {"extra": "forbid"}
 
@@ -37,45 +37,45 @@ class GeometryEstimate(BaseModel):
     vertices: list[list[float]] = Field(
         min_length=MIN_VERTICES,
         max_length=MAX_VERTICES,
-        description="Matriz de vértices Nx3 en metros, objeto centrado en origen.",
+        description="Nx3 vertex matrix in meters, object centered at origin.",
     )
     normals: list[list[float]] = Field(
         min_length=MIN_VERTICES,
         max_length=MAX_VERTICES,
-        description="Normal unitaria por vértice (se normaliza en validación).",
+        description="Unit normal per vertex (normalized during validation).",
     )
     edges: list[list[int]] = Field(
         default_factory=list,
         max_length=MAX_EDGES,
-        description="Pares de índices (0-based) como puntos de control de bordes.",
+        description="Index pairs (0-based) as edge control points.",
     )
     faces: list[list[int]] | None = Field(
         default=None,
         max_length=MAX_FACES,
-        description="Triángulos opcionales como ternas de índices (0-based).",
+        description="Optional triangles as index triples (0-based).",
     )
     source_keyframes: list[int] = Field(
-        min_length=1, description="Índices de frame que informaron la estimación."
+        min_length=1, description="Frame indices that informed the estimate."
     )
     confidence: float = Field(ge=0.0, le=1.0)
     estimated_height_m: float = Field(
-        gt=0.001, lt=50.0, description="Altura real estimada del objeto en metros."
+        gt=0.001, lt=50.0, description="Estimated real-world object height in meters."
     )
     notes: str = Field(default="", max_length=2000)
 
-    # -- validadores de campo -------------------------------------------------
+    # -- field validators ---------------------------------------------------
     @field_validator("vertices", mode="after")
     @classmethod
     def _check_vertices(cls, rows: list[list[float]]) -> list[list[float]]:
         for i, row in enumerate(rows):
             if len(row) != 3:
-                raise ValueError(f"vertices[{i}] debe tener 3 coords, tiene {len(row)}.")
+                raise ValueError(f"vertices[{i}] must have 3 coords, has {len(row)}.")
             for c in row:
                 if not isinstance(c, (int, float)) or not math.isfinite(c):
-                    raise ValueError(f"vertices[{i}] contiene un valor no finito: {row}.")
+                    raise ValueError(f"vertices[{i}] contains a non-finite value: {row}.")
                 if abs(c) > COORD_ABS_MAX:
                     raise ValueError(
-                        f"vertices[{i}]={row} excede ±{COORD_ABS_MAX} m."
+                        f"vertices[{i}]={row} exceeds ±{COORD_ABS_MAX} m."
                     )
         return [[float(c) for c in row] for row in rows]
 
@@ -85,14 +85,14 @@ class GeometryEstimate(BaseModel):
         out: list[list[float]] = []
         for i, row in enumerate(rows):
             if len(row) != 3:
-                raise ValueError(f"normals[{i}] debe tener 3 comps, tiene {len(row)}.")
+                raise ValueError(f"normals[{i}] must have 3 comps, has {len(row)}.")
             vals = [float(c) for c in row]
             if not all(math.isfinite(c) for c in vals):
-                raise ValueError(f"normals[{i}] contiene un valor no finito: {row}.")
+                raise ValueError(f"normals[{i}] contains a non-finite value: {row}.")
             norm = math.sqrt(sum(c * c for c in vals))
             if norm < NORMAL_NORM_MIN:
-                raise ValueError(f"normals[{i}] es (casi) vector cero.")
-            out.append([c / norm for c in vals])  # normalización determinista
+                raise ValueError(f"normals[{i}] is a (near-)zero vector.")
+            out.append([c / norm for c in vals])  # deterministic normalization
         return out
 
     @field_validator("edges", mode="after")
@@ -100,14 +100,14 @@ class GeometryEstimate(BaseModel):
     def _check_edges(cls, rows: list[list[int]]) -> list[list[int]]:
         for i, row in enumerate(rows):
             if len(row) != 2:
-                raise ValueError(f"edges[{i}] debe ser un par, es: {row}.")
+                raise ValueError(f"edges[{i}] must be a pair, is: {row}.")
             a, b = row
             if not isinstance(a, int) or not isinstance(b, int):
-                raise ValueError(f"edges[{i}] debe contener enteros: {row}.")
+                raise ValueError(f"edges[{i}] must contain integers: {row}.")
             if a < 0 or b < 0:
-                raise ValueError(f"edges[{i}] con índice negativo: {row}.")
+                raise ValueError(f"edges[{i}] with negative index: {row}.")
             if a == b:
-                raise ValueError(f"edges[{i}] degenerada (lazo): {row}.")
+                raise ValueError(f"edges[{i}] degenerate (self-loop): {row}.")
         return rows
 
     @field_validator("faces", mode="after")
@@ -117,46 +117,46 @@ class GeometryEstimate(BaseModel):
             return None
         for i, row in enumerate(rows):
             if len(row) != 3:
-                raise ValueError(f"faces[{i}] debe ser terna, es: {row}.")
+                raise ValueError(f"faces[{i}] must be a triple, is: {row}.")
             if not all(isinstance(v, int) for v in row):
-                raise ValueError(f"faces[{i}] debe contener enteros: {row}.")
+                raise ValueError(f"faces[{i}] must contain integers: {row}.")
             if any(v < 0 for v in row):
-                raise ValueError(f"faces[{i}] con índice negativo: {row}.")
+                raise ValueError(f"faces[{i}] with negative index: {row}.")
             if len(set(row)) != 3:
-                raise ValueError(f"faces[{i}] degenerada (vértices repetidos): {row}.")
+                raise ValueError(f"faces[{i}] degenerate (repeated vertices): {row}.")
         return rows
 
     @field_validator("source_keyframes", mode="after")
     @classmethod
     def _check_keyframes(cls, idx: list[int]) -> list[int]:
         if any((not isinstance(v, int)) or v < 0 for v in idx):
-            raise ValueError(f"source_keyframes con valores inválidos: {idx}.")
+            raise ValueError(f"source_keyframes with invalid values: {idx}.")
         return idx
 
-    # -- consistencia cruzada ---------------------------------------------------
+    # -- cross-field consistency ----------------------------------------------
     @model_validator(mode="after")
     def _check_consistency(self) -> GeometryEstimate:
         n = len(self.vertices)
         if len(self.normals) != n:
             raise ValueError(
-                f"normals tiene {len(self.normals)} filas, vertices tiene {n}."
+                f"normals has {len(self.normals)} rows, vertices has {n}."
             )
         for i, (a, b) in enumerate(self.edges):
             if a >= n or b >= n:
-                raise ValueError(f"edges[{i}]=[{a},{b}] fuera de rango (N={n}).")
+                raise ValueError(f"edges[{i}]=[{a},{b}] out of range (N={n}).")
         if self.faces:
             for i, tri in enumerate(self.faces):
                 if any(v >= n for v in tri):
-                    raise ValueError(f"faces[{i}]={tri} fuera de rango (N={n}).")
+                    raise ValueError(f"faces[{i}]={tri} out of range (N={n}).")
         return self
 
-    # -- utilidades -------------------------------------------------------------
+    # -- utilities ------------------------------------------------------------
     @property
     def vertex_count(self) -> int:
         return len(self.vertices)
 
     def to_arrays(self) -> dict[str, Any]:
-        """Devuelve vertices/normals/faces como arrays numpy (import perezoso)."""
+        """Returns vertices/normals/faces as numpy arrays (lazy import)."""
         import numpy as np
 
         out: dict[str, Any] = {

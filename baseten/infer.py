@@ -1,20 +1,20 @@
-"""VOXEL-SAM AR — Fase 2: keyframes segmentados -> `geometry.json`.
+"""VOXEL-SAM AR — Phase 2: segmented keyframes -> `geometry.json`.
 
-Vía remota (primaria): lote de keyframes al modelo del hackatón
-`muse-spark-open-1026` en Baseten vía endpoint OpenAI-compatible, con Instructor
-en modo JSON estricto (`response_model=GeometryEstimate`) + reintentos.
+Remote path (primary): keyframe batch to the hackathon model
+`muse-spark-open-1026` on Baseten via an OpenAI-compatible endpoint, with
+Instructor in strict JSON mode (`response_model=GeometryEstimate`) + retries.
 
-Vía local (fallback determinista): levantamiento 3D por siluetas bajo hipótesis
-de órbita circular uniforme (video 360°): cada scanline de cada máscara aporta
-dos vértices de borde proyectados al azimut correspondiente. Sin pesos, solo
-numpy+PIL. Se usa cuando Baseten no está configurado o falla.
+Local path (deterministic fallback): silhouette-based 3D lifting under a
+uniform circular orbit assumption (360° video): each scanline of each mask
+contributes two edge vertices projected at the matching azimuth. No weights,
+numpy+PIL only. Used when Baseten is not configured or fails.
 
-Uso:
+Usage:
   python -m baseten.infer --keyframes-dir ./kf --meta ./kf/meta.json
   python -m baseten.infer --keyframes-dir ./kf --no-remote --height-m 0.25
 
-Env (vía remota):
-  BASETEN_API_KEY    (requerida para remoto)
+Env (remote path):
+  BASETEN_API_KEY    (required for remote)
   BASETEN_BASE_URL   (default https://inference.baseten.co/v1)
   BASETEN_MODEL_NAME (default muse-spark-open-1026)
 """
@@ -38,7 +38,7 @@ from PIL import Image
 
 try:
     from baseten.schema import GeometryEstimate
-except ImportError:  # ejecución como script directo: python baseten/infer.py
+except ImportError:  # direct script run: python baseten/infer.py
     from schema import GeometryEstimate
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -47,28 +47,28 @@ log = logging.getLogger("voxel-sam-ar.baseten")
 DEFAULT_BASE_URL = "https://inference.baseten.co/v1"
 DEFAULT_MODEL_NAME = "muse-spark-open-1026"
 DEFAULT_HEIGHT_M = 0.20
-MASK_THRESHOLD = 24  # suma RGB mínima para considerar píxel de objeto
+MASK_THRESHOLD = 24  # min RGB sum to count as object pixel
 TRANSPORT_RETRIES = 3
 INSTRUCTOR_RETRIES = 2
 
-SYSTEM_PROMPT = """Eres un estimador de geometría 3D. Recibes KEYFRAMES 360° de un mismo objeto
-segmentado sobre fondo negro, ordenados por azimut creciente (vuelta completa).
+SYSTEM_PROMPT = """You are a 3D geometry estimator. You receive 360° KEYFRAMES of the same
+object segmented on a black background, ordered by increasing azimuth (full turn).
 
-Devuelve EXCLUSIVAMENTE un JSON con esta forma (sin markdown, sin texto extra):
+Return EXCLUSIVELY a JSON with this shape (no markdown, no extra text):
 {
-  "vertices": [[x,y,z], ...],        // 32..512 puntos, metros, objeto CENTRADO en origen
-  "normals": [[nx,ny,nz], ...],      // una por vértice (se normalizan solas)
-  "edges": [[i,j], ...],             // pares de índices 0-based (bordes/aristas)
-  "faces": [[a,b,c], ...] | null,    // triángulos opcionales, índices 0-based
-  "source_keyframes": [int, ...],    // índices de frame usados
+  "vertices": [[x,y,z], ...],        // 32..512 points, meters, object CENTERED at origin
+  "normals": [[nx,ny,nz], ...],      // one per vertex (self-normalized)
+  "edges": [[i,j], ...],             // 0-based index pairs (edges/ridges)
+  "faces": [[a,b,c], ...] | null,    // optional triangles, 0-based indices
+  "source_keyframes": [int, ...],    // frame indices used
   "confidence": 0.0..1.0,
-  "estimated_height_m": float,       // altura real estimada del objeto en metros
-  "notes": "string breve"
+  "estimated_height_m": float,       // estimated real object height in meters
+  "notes": "brief string"
 }
-Reglas: marco Y-up; |coord| <= 50; vértices distribuidos por TODA la superficie
-visible en las vistas (no solo una cara); `normals` con la misma longitud que
-`vertices`; índices válidos; `estimated_height_m` coherente con un objeto cotidiano.
-El campo "source" lo fija el cliente; no lo incluyas.
+Rules: Y-up frame; |coord| <= 50; vertices spread over the WHOLE surface visible
+in the views (not just one face); `normals` with the same length as `vertices`;
+valid indices; `estimated_height_m` consistent with an everyday object.
+The client sets the "source" field; do not include it.
 """
 
 
@@ -85,7 +85,7 @@ class GeometryValidationError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# Carga de keyframes
+# Keyframe loading
 # ---------------------------------------------------------------------------
 
 
@@ -94,7 +94,7 @@ def load_keyframes(
 ) -> tuple[list[np.ndarray], list[int]]:
     pngs = sorted(keyframes_dir.glob("keyframe_*.png"))
     if not pngs:
-        raise GeometryValidationError(f"Sin keyframe_*.png en {keyframes_dir}.")
+        raise GeometryValidationError(f"No keyframe_*.png in {keyframes_dir}.")
     frames: list[np.ndarray] = []
     for p in pngs:
         with Image.open(p) as img:
@@ -107,8 +107,8 @@ def load_keyframes(
             if isinstance(frames_idx, list) and len(frames_idx) == len(pngs):
                 indices = [int(v) for v in frames_idx]
         except (ValueError, AttributeError) as exc:
-            log.warning("meta.json ilegible (%s); usando índices 0..N-1.", exc)
-    log.info("Keyframes cargados: %d (%s).", len(frames), keyframes_dir)
+            log.warning("meta.json unreadable (%s); using 0..N-1 indices.", exc)
+    log.info("Keyframes loaded: %d (%s).", len(frames), keyframes_dir)
     return frames, indices
 
 
@@ -121,7 +121,7 @@ def _pil_to_data_uri(img: Image.Image, max_side: int, jpeg_q: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Vía remota: Baseten + Instructor (JSON estricto)
+# Remote path: Baseten + Instructor (strict JSON)
 # ---------------------------------------------------------------------------
 
 
@@ -135,14 +135,14 @@ def estimate_remote(
         import instructor
         import openai
     except ImportError as exc:
-        raise BasetenConfigError(f"Falta dependencia remota: {exc}") from exc
+        raise BasetenConfigError(f"Missing remote dependency: {exc}") from exc
 
     api_key = os.environ.get("BASETEN_API_KEY", "").strip()
     if not api_key:
-        raise BasetenConfigError("BASETEN_API_KEY ausente.")
+        raise BasetenConfigError("BASETEN_API_KEY missing.")
     base_url = os.environ.get("BASETEN_BASE_URL", DEFAULT_BASE_URL).strip()
     model = os.environ.get("BASETEN_MODEL_NAME", DEFAULT_MODEL_NAME).strip()
-    log.info("Remoto: model=%s base_url=%s (%d imágenes).", model, base_url, len(frames))
+    log.info("Remote: model=%s base_url=%s (%d images).", model, base_url, len(frames))
 
     raw = openai.OpenAI(base_url=base_url, api_key=api_key, timeout=300.0)
     client = instructor.from_openai(raw, mode=instructor.Mode.JSON)
@@ -151,9 +151,9 @@ def estimate_remote(
         {
             "type": "text",
             "text": (
-                f"Estima la geometría 3D del objeto a partir de estos {len(frames)} "
-                f"keyframes 360° (azimut uniforme, vuelta completa). Índices de "
-                f"frame: {frame_indices}. Devuelve solo el JSON."
+                f"Estimate the 3D geometry of the object from these {len(frames)} "
+                f"360° keyframes (uniform azimuth, full turn). Frame "
+                f"indices: {frame_indices}. Return only the JSON."
             ),
         }
     ]
@@ -180,7 +180,7 @@ def estimate_remote(
             )
             estimate.source = "muse-spark-open-1026"
             return estimate
-        except Exception as exc:  # noqa: BLE001 - se clasifica abajo
+        except Exception as exc:  # noqa: BLE001 - classified below
             last_err = exc
             name = type(exc).__name__
             retryable = any(
@@ -195,22 +195,22 @@ def estimate_remote(
                     "APIError",
                 )
             ) or "validation" not in name.lower()
-            # Errores de validación de Instructor ya reintentaron dentro;
-            # solo los de transporte merecen otro ciclo exterior.
+            # Instructor validation errors already retried inside;
+            # only transport ones deserve another outer cycle.
             if "validation" in name.lower() or "Validation" in name:
                 raise GeometryValidationError(
-                    f"El modelo devolvió JSON inválido tras reintentos: {exc}"
+                    f"Model returned invalid JSON after retries: {exc}"
                 ) from exc
             if not retryable or attempt == TRANSPORT_RETRIES:
                 break
             backoff = 2.0**attempt + random.uniform(0, 1)
-            log.warning("Remoto intento %d falló (%s); reintento en %.1fs.", attempt, exc, backoff)
+            log.warning("Remote attempt %d failed (%s); retrying in %.1fs.", attempt, exc, backoff)
             time.sleep(backoff)
-    raise BasetenTransportError(f"Baseten falló tras {TRANSPORT_RETRIES} intentos: {last_err}")
+    raise BasetenTransportError(f"Baseten failed after {TRANSPORT_RETRIES} attempts: {last_err}")
 
 
 # ---------------------------------------------------------------------------
-# Vía local: levantamiento por siluetas (determinista, numpy)
+# Local path: silhouette lifting (deterministic, numpy)
 # ---------------------------------------------------------------------------
 
 
@@ -230,16 +230,16 @@ def estimate_from_silhouettes(
     frame_indices: list[int],
     height_m: float = DEFAULT_HEIGHT_M,
 ) -> GeometryEstimate:
-    """Reconstruye un tubo visual-hull por scanlines bajo órbita uniforme.
+    """Rebuilds a scanline visual-hull tube under a uniform orbit.
 
-    Cámara en órbita circular de radio R mirando al origen; vector "derecha"
-    de imagen al azimut θ: right(θ) = (-sinθ, 0, cosθ). Cada borde de silueta
-    (du píxeles desde el centro) se levanta a P = du*s*right(θ) + (0, y, 0).
+    Camera on a circular orbit of radius R looking at the origin; image
+    "right" vector at azimuth θ: right(θ) = (-sinθ, 0, cosθ). Each silhouette
+    edge (du pixels from center) lifts to P = du*s*right(θ) + (0, y, 0).
     """
     if not frames:
-        raise GeometryValidationError("Sin frames para estimar.")
+        raise GeometryValidationError("No frames to estimate from.")
     if not (0.001 < height_m < 50.0):
-        raise GeometryValidationError(f"height_m fuera de rango: {height_m}.")
+        raise GeometryValidationError(f"height_m out of range: {height_m}.")
 
     h, w = frames[0].shape[:2]
     cx_img = w / 2.0
@@ -250,11 +250,11 @@ def estimate_from_silhouettes(
         bboxes.append((int(rows[0]), int(rows[-1])) if rows.size else None)
     valid = [i for i, b in enumerate(bboxes) if b is not None]
     if not valid:
-        raise GeometryValidationError("Todas las máscaras están vacías.")
+        raise GeometryValidationError("All masks are empty.")
 
     heights = [bboxes[i][1] - bboxes[i][0] + 1 for i in valid]  # type: ignore[index]
     horizon = float(np.median([(bboxes[i][0] + bboxes[i][1]) / 2 for i in valid]))  # type: ignore[index]
-    s = height_m / float(np.median(heights))  # metros por píxel
+    s = height_m / float(np.median(heights))  # meters per pixel
 
     n_total = len(frames)
     n_valid = len(valid)
@@ -265,14 +265,14 @@ def estimate_from_silhouettes(
     grid: dict[tuple[int, int, int], int] = {}  # (rank_valid, slot, side) -> idx
 
     for rank, i in enumerate(valid):
-        theta = 2.0 * np.pi * i / n_total  # azimut por posición en la secuencia
+        theta = 2.0 * np.pi * i / n_total  # azimuth by position in the sequence
         right = np.array([-np.sin(theta), 0.0, np.cos(theta)])
         y0, y1 = bboxes[i]  # type: ignore[misc]
         rows = np.linspace(y0, y1, n_scan).round().astype(int)
         for slot, r in enumerate(rows):
             run = _longest_run(masks[i][r])
             if run is None:
-                # Scanline vacía: duplica la fila vecina válida más cercana.
+                # Empty scanline: reuse the nearest valid neighboring row.
                 run = next(
                     (_longest_run(masks[i][rr]) for rr in rows if _longest_run(masks[i][rr])),
                     None,
@@ -312,7 +312,7 @@ def estimate_from_silhouettes(
                 faces.append([a, b, c])
                 faces.append([a, c, d])
 
-    # Tapas superior/inferior en abanico sobre el anillo extremo.
+    # Top/bottom fan caps over the end rings.
     ys = [v[1] for v in verts]
     top_idx, bot_idx = len(verts), len(verts) + 1
     verts += [[0.0, max(ys), 0.0], [0.0, min(ys), 0.0]]
@@ -338,8 +338,8 @@ def estimate_from_silhouettes(
         confidence=0.35,
         estimated_height_m=height_m,
         notes=(
-            f"Fallback por siluetas: órbita 360° uniforme, {n_valid}/{n_total} vistas "
-            f"válidas, {n_scan} scanlines, escala {s:.5f} m/px desde altura {height_m} m."
+            f"Silhouette fallback: uniform 360° orbit, {n_valid}/{n_total} valid "
+            f"views, {n_scan} scanlines, scale {s:.5f} m/px from height {height_m} m."
         ),
     )
 
@@ -350,12 +350,12 @@ def estimate_from_silhouettes(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Keyframes 360° -> geometry.json (Fase 2).")
+    p = argparse.ArgumentParser(description="360° keyframes -> geometry.json (Phase 2).")
     p.add_argument("--keyframes-dir", required=True, type=Path)
-    p.add_argument("--meta", type=Path, default=None, help="meta.json con índices reales")
+    p.add_argument("--meta", type=Path, default=None, help="meta.json with real indices")
     p.add_argument("--out", type=Path, default=None, help="default: <keyframes-dir>/geometry.json")
     p.add_argument("--height-m", type=float, default=DEFAULT_HEIGHT_M)
-    p.add_argument("--no-remote", action="store_true", help="solo fallback local")
+    p.add_argument("--no-remote", action="store_true", help="local fallback only")
     p.add_argument("--max-side", type=int, default=768)
     p.add_argument("--jpeg-q", type=int, default=72)
     return p
@@ -366,25 +366,25 @@ def main(argv: list[str] | None = None) -> int:
     try:
         frames, indices = load_keyframes(args.keyframes_dir, args.meta)
     except GeometryValidationError as exc:
-        log.error("Entrada inválida: %s", exc)
+        log.error("Invalid input: %s", exc)
         return 2
 
     estimate: GeometryEstimate | None = None
     if not args.no_remote:
         try:
             estimate = estimate_remote(frames, indices, args.max_side, args.jpeg_q)
-            log.info("Geometría remota OK: %s", estimate.summary())
+            log.info("Remote geometry OK: %s", estimate.summary())
         except BasetenConfigError as exc:
-            log.warning("Remoto no configurado (%s); usando fallback local.", exc)
+            log.warning("Remote not configured (%s); using local fallback.", exc)
         except (BasetenTransportError, GeometryValidationError) as exc:
-            log.error("Remoto falló (%s); usando fallback local.", exc)
+            log.error("Remote failed (%s); using local fallback.", exc)
 
     if estimate is None:
         try:
             estimate = estimate_from_silhouettes(frames, indices, args.height_m)
-            log.info("Geometría local OK: %s", estimate.summary())
+            log.info("Local geometry OK: %s", estimate.summary())
         except GeometryValidationError as exc:
-            log.error("Fallback local falló: %s", exc)
+            log.error("Local fallback failed: %s", exc)
             return 1
 
     out = args.out or (args.keyframes_dir / "geometry.json")

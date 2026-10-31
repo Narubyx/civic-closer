@@ -1,23 +1,23 @@
-"""VOXEL-SAM AR — Fase 3: bucle agéntico de refinamiento de malla.
+"""VOXEL-SAM AR — Phase 3: agentic mesh-refinement loop.
 
-Ciclo 0 ejecuta el baseline determinista (`baseline_poisson.py`). Si la malla no
-es estanca, el modelo (Meta Model API, OpenAI-compatible) recibe el resumen
-geométrico + stderr + MeshReport y devuelve un script candidato; se ejecuta en el
-backend (`local` = subprocess, `modal` = Sandbox + Volume), se audita, y se
-reitera hasta 10 ciclos. Al éxito exporta `model.glb` (+ `model.usdz` si hay
-conversor) y un manifiesto completo del run.
+Cycle 0 runs the deterministic baseline (`baseline_poisson.py`). If the mesh is
+not watertight, the model (Meta Model API, OpenAI-compatible) receives the
+geometry summary + stderr + MeshReport and returns a candidate script; it runs
+on the backend (`local` = subprocess, `modal` = Sandbox + Volume), gets audited,
+and iterates up to 10 cycles. On success it exports `model.glb` (+ `model.usdz`
+when a converter exists) and a full run manifest.
 
-Uso:
+Usage:
   python -m agent.loop --geometry ./geometry.json --exec local
   python -m agent.loop --geometry ./geometry.json --exec modal --max-cycles 10
 
-Env (ciclos 1..N, requieren modelo):
-  META_MODEL_API_KEY   (sin clave: solo corre el baseline y reporta)
-  META_MODEL_BASE_URL  (endpoint OpenAI-compatible, requerido con clave)
+Env (cycles 1..N, require a model):
+  META_MODEL_API_KEY   (without key: baseline only, then report)
+  META_MODEL_BASE_URL  (OpenAI-compatible endpoint, required with key)
   META_MODEL_NAME      (default muse-spark-1.3-max)
 
-Códigos de salida: 0 éxito (malla estanca) · 3 ciclos agotados/baseline
-insuficiente sin clave · 2 entrada inválida · 1 error de infraestructura.
+Exit codes: 0 success (watertight mesh) · 3 cycles exhausted / insufficient
+baseline without key · 2 invalid input · 1 infrastructure error.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ from typing import Any
 try:
     from agent.mesh_tools import MeshReport
     from agent.prompts import MAX_CYCLES, SYSTEM_PROMPT, build_user_prompt, extract_code
-except ImportError:  # ejecución con cwd=agent/
+except ImportError:  # run with cwd=agent/
     from mesh_tools import MeshReport
     from prompts import MAX_CYCLES, SYSTEM_PROMPT, build_user_prompt, extract_code
 
@@ -68,7 +68,7 @@ class BackendError(LoopError):
 
 
 # ---------------------------------------------------------------------------
-# Estructuras
+# Structures
 # ---------------------------------------------------------------------------
 
 
@@ -108,12 +108,12 @@ def new_run_id() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Backends de ejecución
+# Execution backends
 # ---------------------------------------------------------------------------
 
 
 class LocalBackend:
-    """Ejecuta candidatos con el Python actual en un directorio de trabajo."""
+    """Runs candidates with the current Python in a working directory."""
 
     name = "local"
 
@@ -150,7 +150,7 @@ class LocalBackend:
     def fetch(self, name: str) -> bytes:
         p = self.workdir / name
         if not p.exists():
-            raise BackendError(f"local: falta {name}.")
+            raise BackendError(f"local: missing {name}.")
         return p.read_bytes()
 
     def has_file(self, name: str) -> bool:
@@ -161,11 +161,11 @@ class LocalBackend:
 
 
 class ModalBackend:
-    """Ejecuta candidatos en Modal Sandboxes (CPU) con volumen persistente.
+    """Runs candidates on Modal Sandboxes (CPU) with a persistent volume.
 
-    Un Sandbox solo ve los ficheros subidos ANTES de su creación (montaje por
-    snapshot), así que se genera un Sandbox fresco por ciclo: sala limpia +
-    todos los uploads visibles. La imagen queda cacheada tras el primer ciclo.
+    A Sandbox only sees files uploaded BEFORE its creation (snapshot mount),
+    so a fresh Sandbox is spawned per cycle: clean room + all uploads visible.
+    The image stays cached after the first cycle.
     """
 
     name = "modal"
@@ -174,7 +174,7 @@ class ModalBackend:
         try:
             import modal
         except ImportError as exc:
-            raise BackendError(f"modal no instalado: {exc}") from exc
+            raise BackendError(f"modal not installed: {exc}") from exc
         self._modal = modal
         self.run_id = run_id
         self.exec_timeout = exec_timeout
@@ -189,7 +189,7 @@ class ModalBackend:
 
     def _spawn(self) -> None:
         self.close()
-        log.info("Creando Sandbox Modal (imagen malla + usd-core)…")
+        log.info("Creating Modal Sandbox (mesh + usd-core image)…")
         self.sb = self._modal.Sandbox.create(
             app=self.app, image=self.image, volumes={"/work": self.volume}, timeout=3600
         )
@@ -206,10 +206,10 @@ class ModalBackend:
         import tempfile
 
         remotes = [f"{self.run_id}/{name}" for name in files]
-        for rp in remotes:  # put_file no sobrescribe: limpieza idempotente
+        for rp in remotes:  # put_file does not overwrite: idempotent cleanup
             try:
                 self.volume.remove_file(rp)
-            except Exception:  # noqa: BLE001 - ausente u otro; put lo dirá
+            except Exception:  # noqa: BLE001 - missing or other; put will tell
                 pass
         with tempfile.TemporaryDirectory(prefix="voxel_agent_") as tmp:
             locals_: list[tuple[str, str]] = []
@@ -225,19 +225,43 @@ class ModalBackend:
         self.setup({name: data})
 
     def run_script(self, name: str) -> ExecResult:
-        self._spawn()  # el Sandbox debe nacer DESPUÉS de subir el script
+        self._spawn()  # the Sandbox must be born AFTER uploading the script
         return self._exec("python3", f"{self.remote}/{name}")
 
-    def fetch(self, name: str) -> bytes:
-        # Descarga vía base64 sobre stdout (solo usa exec; binario seguro).
-        code = (
-            "import base64,sys;"
-            f"sys.stdout.write(base64.b64encode(open({self.remote + '/' + name!r},'rb').read()).decode())"
-        )
-        res = self._exec("python3", "-c", code)
+    def _remote_size(self, name: str) -> int:
+        rp = f"{self.remote}/{name}"
+        res = self._exec("python3", "-c", f"import os;print(os.path.getsize({rp!r}))")
         if res.exit_code != 0:
-            raise BackendError(f"modal: falta {name}: {res.stderr[-500:]}")
-        return base64.b64decode(res.stdout.strip())
+            raise BackendError(f"modal: missing {name}: {res.stderr[-500:]}")
+        try:
+            return int(res.stdout.strip().split()[-1])
+        except ValueError:
+            raise BackendError(f"modal: unreadable size of {name}: {res.stdout[-200:]!r}")
+
+    def fetch(self, name: str) -> bytes:
+        # Download via base64 over stdout, in 4 KiB chunks: an exec's captured
+        # stdout truncates large outputs (keeps the tail), so a single dump
+        # corrupts binaries > ~6 KiB.
+        rp = f"{self.remote}/{name}"
+        size = self._remote_size(name)
+        chunks: list[bytes] = []
+        for off in range(0, size, 4096):
+            code = (
+                "import base64,sys;"
+                f"f=open({rp!r},'rb');f.seek({off});"
+                "sys.stdout.write(base64.b64encode(f.read(4096)).decode())"
+            )
+            res = self._exec("python3", "-c", code)
+            if res.exit_code != 0:
+                raise BackendError(f"modal: chunk {off} of {name}: {res.stderr[-500:]}")
+            try:
+                chunks.append(base64.b64decode(res.stdout.strip()))
+            except Exception as exc:
+                raise BackendError(f"modal: broken base64 in {name}@{off}: {exc}") from exc
+        data = b"".join(chunks)
+        if len(data) != size:
+            raise BackendError(f"modal: incomplete fetch of {name}: {len(data)}/{size} B.")
+        return data
 
     def has_file(self, name: str) -> bool:
         res = self._exec("test", "-f", f"{self.remote}/{name}")
@@ -249,12 +273,12 @@ class ModalBackend:
             return
         try:
             sb.terminate()
-        except Exception:  # noqa: BLE001 - cierre best-effort
+        except Exception:  # noqa: BLE001 - best-effort close
             pass
 
 
 # ---------------------------------------------------------------------------
-# Cliente del modelo
+# Model client
 # ---------------------------------------------------------------------------
 
 
@@ -264,13 +288,13 @@ class ModelClient:
         self.base_url = (os_environ("META_MODEL_BASE_URL")).strip()
         self.model = (os_environ("META_MODEL_NAME") or DEFAULT_MODEL_NAME).strip()
         if not self.api_key:
-            raise ModelConfigError("META_MODEL_API_KEY ausente.")
+            raise ModelConfigError("META_MODEL_API_KEY missing.")
         if not self.base_url:
-            raise ModelConfigError("META_MODEL_BASE_URL ausente.")
+            raise ModelConfigError("META_MODEL_BASE_URL missing.")
         try:
             import openai
         except ImportError as exc:
-            raise ModelConfigError(f"openai no instalado: {exc}") from exc
+            raise ModelConfigError(f"openai not installed: {exc}") from exc
         self._client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url, timeout=180.0)
 
     def draft_script(self, geometry_summary: dict[str, Any], history: list[dict[str, Any]],
@@ -292,11 +316,11 @@ class ModelClient:
                     max_tokens=6000,
                 )
                 return extract_code(resp.choices[0].message.content or "")
-            except Exception as exc:  # noqa: BLE001 - transporte o parseo
+            except Exception as exc:  # noqa: BLE001 - transport or parsing
                 last = exc
-                log.warning("Modelo intento %d falló: %s", attempt, exc)
+                log.warning("Model attempt %d failed: %s", attempt, exc)
                 _t.sleep(2.0**attempt + _r.uniform(0, 1))
-        raise ModelError(f"Modelo falló 3 veces: {last}")
+        raise ModelError(f"Model failed 3 times: {last}")
 
 
 def os_environ(name: str) -> str:
@@ -306,7 +330,7 @@ def os_environ(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Orquestador
+# Orchestrator
 # ---------------------------------------------------------------------------
 
 
@@ -342,12 +366,12 @@ def run_loop(
     run_dir.mkdir(parents=True, exist_ok=True)
 
     if not geometry_path.exists():
-        print(json.dumps({"error": f"geometry.json ausente: {geometry_path}"}))
+        print(json.dumps({"error": f"geometry.json missing: {geometry_path}"}))
         return RunManifest(run_id, backend_name, status="error"), 2
     try:
         geometry_summary = _geometry_summary_local(geometry_path)
-    except Exception as exc:  # noqa: BLE001 - entrada inválida
-        print(json.dumps({"error": f"geometry.json inválido: {exc}"}))
+    except Exception as exc:  # noqa: BLE001 - invalid input
+        print(json.dumps({"error": f"geometry.json invalid: {exc}"}))
         return RunManifest(run_id, backend_name, status="error"), 2
 
     geometry_bytes = geometry_path.read_bytes()
@@ -364,12 +388,12 @@ def run_loop(
         elif backend_name == "local":
             backend = LocalBackend(run_dir / "exec", exec_timeout)
         else:
-            raise BackendError(f"backend desconocido: {backend_name!r}.")
+            raise BackendError(f"unknown backend: {backend_name!r}.")
         backend.setup({"geometry.json": geometry_bytes, "mesh_tools.py": mesh_tools_bytes})
     except Exception as exc:  # noqa: BLE001 - infra
         manifest.status = "error"
         _write_manifest(run_dir, manifest)
-        log.error("Backend falló: %s", exc)
+        log.error("Backend failed: %s", exc)
         return manifest, 1
 
     history: list[dict[str, Any]] = []
@@ -379,7 +403,7 @@ def run_loop(
             model_client = ModelClient()
             manifest.model = model_client.model
         except ModelConfigError as exc:
-            log.warning("Sin modelo (%s): solo baseline.", exc)
+            log.warning("No model (%s): baseline only.", exc)
 
     try:
         for cycle in range(max_cycles):
@@ -403,7 +427,7 @@ def run_loop(
                 f"--- stdout ---\n{res.stdout}\n--- stderr ---\n{res.stderr}",
                 encoding="utf-8",
             )
-            report_dict: dict[str, Any] = {"ok": False, "errors": ["sin report.json"], "stats": {}}
+            report_dict: dict[str, Any] = {"ok": False, "errors": ["missing report.json"], "stats": {}}
             try:
                 report_dict = json.loads(backend.fetch("report.json").decode("utf-8"))
                 (run_dir / f"{tag}.report.json").write_text(
@@ -419,14 +443,14 @@ def run_loop(
             manifest.cycles = history
             _write_manifest(run_dir, manifest)
             ok = bool(report_dict.get("ok")) and res.exit_code == 0
-            log.info("ciclo %d (%s): exit=%d ok=%s errores=%s", cycle, kind,
+            log.info("cycle %d (%s): exit=%d ok=%s errors=%s", cycle, kind,
                      res.exit_code, report_dict.get("ok"), report_dict.get("errors"))
             if ok:
                 try:
                     glb = backend.fetch("candidate.glb")
                 except BackendError as exc:
                     manifest.status = "error"
-                    history.append({"cycle": cycle, "error": f"glb ausente: {exc}"})
+                    history.append({"cycle": cycle, "error": f"glb missing: {exc}"})
                     break
                 (run_dir / "model.glb").write_bytes(glb)
                 manifest.usdz = _try_usdz(backend, run_dir)
@@ -456,7 +480,7 @@ def _try_usdz(backend: LocalBackend | ModalBackend, run_dir: Path) -> dict[str, 
 
             conv = to_usdz(run_dir / "model.glb", run_dir / "model.usdz")
             return {"ok": True, "converter": conv, "path": "model.usdz"}
-        except Exception as exc:  # noqa: BLE001 - conversión best-effort
+        except Exception as exc:  # noqa: BLE001 - best-effort conversion
             return {"ok": False, "error": str(exc)[-500:]}
         finally:
             sys.path.remove(str(AGENT_DIR))
@@ -482,7 +506,7 @@ def _try_usdz(backend: LocalBackend | ModalBackend, run_dir: Path) -> dict[str, 
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Feedback loop de malla watertight (Fase 3).")
+    p = argparse.ArgumentParser(description="Watertight mesh feedback loop (Phase 3).")
     p.add_argument("--geometry", required=True, type=Path)
     p.add_argument("--out-dir", type=Path, default=AGENT_DIR / "runs")
     p.add_argument("--run-id", default=None)

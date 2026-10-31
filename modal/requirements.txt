@@ -1,6 +1,6 @@
-# Deps reales del Paso 1 (Python 3.11). Sin paquetes ficticios:
-# SAM 3.1 / SAM 2 se resuelven por checkpoint (vars SAM31_CHECKPOINT / SAM2_CHECKPOINT)
-# y el fallback SAM ViT-H + flujo óptico siempre funciona con esta lista.
+# Real Step 1 deps (Python 3.11). No fictional packages:
+# SAM 3.1 / SAM 2 resolve via checkpoint (SAM31_CHECKPOINT / SAM2_CHECKPOINT vars)
+# and the SAM ViT-H + optical-flow fallback always works with this list.
 modal>=0.66
 fastapi>=0.111
 uvicorn>=0.30

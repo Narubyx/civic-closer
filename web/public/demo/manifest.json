@@ -1,0 +1,51 @@
+{
+  "backend": "modal",
+  "cycles": [
+    {
+      "cycle": 0,
+      "duration_s": 2.9082884000381455,
+      "exit_code": 0,
+      "kind": "baseline",
+      "report": {
+        "errors": [],
+        "ok": true,
+        "stats": {
+          "area": 0.707379621845769,
+          "bbox_max": [
+            0.2220665924387505,
+            0.1644628099173554,
+            3.704303541222573e-17
+          ],
+          "bbox_min": [
+            -0.2688174540048033,
+            -0.1644628099173554,
+            -0.3801652892561984
+          ],
+          "boundary_edges": 0,
+          "degenerate_faces": 0,
+          "euler_number": 2,
+          "faces": 384,
+          "input": {
+            "faces_in": 768,
+            "vertices": 386
+          },
+          "method": "faces+repair",
+          "nonmanifold_edges": 0,
+          "vertices": 194,
+          "volume": 0.027443478987011827,
+          "watertight": true,
+          "winding_consistent": true
+        }
+      },
+      "stderr_tail": ""
+    }
+  ],
+  "model": null,
+  "run_id": "test_modal_usdz",
+  "status": "success",
+  "usdz": {
+    "converter": "usda+zip",
+    "ok": true,
+    "path": "model.usdz"
+  }
+}

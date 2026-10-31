@@ -1,85 +1,86 @@
-# VOXEL-SAM AR — Plan de ejecución de archivos
+# VOXEL-SAM AR — File execution plan
 
-Pipeline de ingeniería inversa 3D para WebAR: video 360° → segmentación SAM →
-nube de vértices → malla watertight vía agente con feedback loop → .GLB/.USDZ → visor WebAR.
+3D reverse-engineering pipeline for WebAR: 360° video → SAM segmentation →
+vertex cloud → watertight mesh via an agent with a feedback loop → `.GLB`/`.USDZ`
+→ WebAR viewer.
 
-Orden estricto de creación. Cada fase cierra con un criterio de aceptación verificable
-por terminal / API, sin GUI en el backend.
+Strict creation order. Each phase closes with an acceptance criterion verifiable
+via terminal / API, with no GUI on the backend.
 
 ---
 
-## Fase 0 — Base del repo (esta entrega)
+## Phase 0 — Repo base (this delivery)
 
-| # | Archivo | Propósito | Aceptación |
-|---|---------|-----------|------------|
-| 0.1 | `README.md` | Visión, arquitectura, quickstart, ejemplos curl | `README.md` existe y documenta `/health` y `/segment` |
-| 0.2 | `.gitignore` | Python, Node, Modal, artefactos de video/malla | `git status` limpio tras build local |
-| 0.3 | `LICENSE` | MIT | Existe |
-| 0.4 | `docs/PLAN.md` | Este archivo | Existe |
-| 0.5 | `modal/requirements.txt` | Deps pineadas del Paso 1 (solo paquetes reales de PyPI) | `pip install -r modal/requirements.txt` OK en Python 3.11 |
-| 0.6 | `modal/app.py` | **PASO 1 COMPLETO**: FastAPI + Modal GPU + SAM + tracking 360° + 24 keyframes con fondo negro | `python -m py_compile modal/app.py` OK; `modal deploy modal/app.py` expone `/health` y `/segment` |
+| # | File | Purpose | Acceptance |
+|---|------|---------|------------|
+| 0.1 | `README.md` | Vision, architecture, quickstart, curl examples | `README.md` exists and documents `/health` and `/segment` |
+| 0.2 | `.gitignore` | Python, Node, Modal, video/mesh artifacts | Clean `git status` after local build |
+| 0.3 | `LICENSE` | MIT | Exists |
+| 0.4 | `docs/PLAN.md` | This file | Exists |
+| 0.5 | `modal/requirements.txt` | Pinned Step 1 deps (real PyPI packages only) | `pip install -r modal/requirements.txt` OK on Python 3.11 |
+| 0.6 | `modal/app.py` | **STEP 1 COMPLETE**: FastAPI + Modal GPU + SAM + 360° tracking + 24 black-background keyframes | `python -m py_compile modal/app.py` OK; `modal deploy modal/app.py` exposes `/health` and `/segment` |
 
-## Fase 1 — Ingesta y visión (Modal GPU) — ENTREGADA AQUÍ
+## Phase 1 — Ingest & vision (Modal GPU) — DELIVERED HERE
 
-- `modal/app.py` (único archivo del paso):
-  - `modal.App("voxel-sam-ar-ingest")`, imagen `debian_slim` Python 3.11, GPU A10G.
-  - Clase `Segmenter` con `@modal.enter()` (carga perezosa del checkpoint SAM en GPU)
-    y `@modal.method()` (segmentación + tracking + keyframes).
-  - Adaptador `SamVideoAdapter`: intenta `sam3` → `sam2` → `segment_anything` (SAM ViT-H
-    por frame + tracking por flujo óptico LK como fallback determinista).
+- `modal/app.py` (the step's only file):
+  - `modal.App("voxel-sam-ar-ingest")`, `debian_slim` Python 3.11 image, A10G GPU.
+  - `Segmenter` class with `@modal.enter()` (lazy SAM checkpoint load on GPU)
+    and `@modal.method()` (segmentation + tracking + keyframes).
+  - `SamVideoAdapter`: tries `sam3` → `sam2` → `segment_anything` (per-frame SAM
+    ViT-H + Lucas-Kanade optical-flow tracking as the deterministic fallback).
   - FastAPI: `GET /health`, `POST /segment` (multipart: `file`, `x`, `y`,
     `num_keyframes=24`), `POST /segment-b64` (JSON), `GET /jobs/{job_id}`.
-  - Salida: 24 PNG con fondo negro (alfa purgado), máscaras RLE-lite (base64),
-    bboxes, índices de frame y metadatos. Persistencia en `modal.Volume`.
-  - Entrypoint local `modal run modal/app.py --video ./demo.mp4 --x 320 --y 240`
-    para prueba sin desplegar.
+  - Output: 24 PNGs with black background (purged alpha), plus RLE-lite base64
+    masks, bboxes, frame indices and metadata. Persisted to a `modal.Volume`.
+  - Local entrypoint `modal run modal/app.py --video ./demo.mp4 --x 320 --y 240`
+    for testing without deploying.
 
-## Fase 2 — Extracción geométrica (Baseten, `muse-spark-open-1026`)
+## Phase 2 — Geometric extraction (Baseten, `muse-spark-open-1026`)
 
-| # | Archivo | Propósito |
-|---|---------|-----------|
-| 2.1 | `baseten/schema.py` | Modelos Pydantic estrictos: `VertexMatrix`, `EdgeControlPoint`, `SurfaceNormal`, `GeometryEstimate` (validación de longitudes, rangos, unidades en metros). |
-| 2.2 | `baseten/infer.py` | Cliente Baseten: envía lote de 24 keyframes (base64), usa Instructor/Outlines para forzar JSON-schema, reintenta con backoff, valida contra `schema.py`, guarda `geometry.json`. |
+| # | File | Purpose |
+|---|------|---------|
+| 2.1 | `baseten/schema.py` | Strict Pydantic models: `VertexMatrix`, `EdgeControlPoint`, `SurfaceNormal`, `GeometryEstimate` (length, range and meter-unit validation). |
+| 2.2 | `baseten/infer.py` | Baseten client: sends the 24-keyframe batch (base64), uses Instructor/Outlines to force the JSON schema, retries with backoff, validates against `schema.py`, saves `geometry.json`. |
 | 2.3 | `baseten/requirements.txt` | `baseten`, `instructor`, `outlines`, `pydantic>=2`, `httpx`. |
 
-Contrato `geometry.json` (resumen): `vertices: float[N,3]`, `edges: int[M,2]`,
+`geometry.json` contract (summary): `vertices: float[N,3]`, `edges: int[M,2]`,
 `normals: float[N,3]`, `units: "meters"`, `source_keyframes: int[24]`, `confidence: float`.
 
-## Fase 3 — Motor agéntico + feedback loop (Muse Spark 1.3 max vía Meta Model API, Sandbox Modal)
+## Phase 3 — Agentic engine + feedback loop (Muse Spark 1.3 max via Meta Model API, Modal Sandbox)
 
-| # | Archivo | Propósito |
-|---|---------|-----------|
-| 3.1 | `agent/mesh_tools.py` | API determinista de malla: `triangulate()`, `repair_watertight()`, `smooth()`, `check_topology()` (detecta caras cruzadas, huecos, no-manifold, normales invertidas) con Open3D + Trimesh + SciPy. Cada chequeo devuelve `MeshReport{ok, errors[], stats{}}`. |
-| 3.2 | `agent/prompts.py` | System prompt + plantilla de reintento: recibe `geometry.json` + `stderr` + `MeshReport` y debe devolver SOLO un script Python ejecutable que llama a `mesh_tools`. Incluye presupuesto de 10 ciclos y reglas de escalada de parámetros. |
-| 3.3 | `agent/loop.py` | Bucle autónomo: 1) pide script al modelo → 2) ejecuta en Sandbox Modal con timeout → 3) captura `stdout/stderr` + `MeshReport` → 4) si falla, reinyecta error y reintenta (máx 10) → 5) al éxito exporta `model.glb` + convierte a `.usdz` vía `assimp`/`blender --background --python`. Registra cada ciclo en `agent/runs/{run_id}/cycle_XX.{py,log,json}`. |
+| # | File | Purpose |
+|---|------|---------|
+| 3.1 | `agent/mesh_tools.py` | Deterministic mesh API: `triangulate()`, `repair_watertight()`, `smooth()`, `check_topology()` (detects crossed faces, holes, non-manifold, flipped normals) with Open3D + Trimesh + SciPy. Every check returns `MeshReport{ok, errors[], stats{}}`. |
+| 3.2 | `agent/prompts.py` | System prompt + retry template: receives `geometry.json` + `stderr` + `MeshReport` and must return ONLY an executable Python script calling `mesh_tools`. Includes the 10-cycle budget and parameter-escalation rules. |
+| 3.3 | `agent/loop.py` | Autonomous loop: 1) asks the model for a script → 2) runs it in the Modal Sandbox with timeout → 3) captures `stdout/stderr` + `MeshReport` → 4) on failure, re-injects the error and retries (max 10) → 5) on success exports `model.glb` + converts to `.usdz` via `assimp`/`blender --background --python`. Logs every cycle to `agent/runs/{run_id}/cycle_XX.{py,log,json}`. |
 | 3.4 | `agent/requirements.txt` | `open3d`, `trimesh[easy]`, `scipy`, `numpy`, `boto3`/`httpx` (Meta Model API). |
 
-Criterio de aceptación Fase 3: malla con `watertight=true`, `winding_consistent=true`,
-`euler_valid=true`, 0 errores topológicos, y `model.glb` + `model.usdz` generados.
+Phase 3 acceptance: mesh with `watertight=true`, `winding_consistent=true`,
+`euler_valid=true`, 0 topology errors, and generated `model.glb` + `model.usdz`.
 
-## Fase 4 — Presentación WebAR (TypeScript)
+## Phase 4 — WebAR presentation (TypeScript)
 
-| # | Archivo | Propósito |
-|---|---------|-----------|
-| 4.1 | `web/package.json`, `web/vite.config.ts` | App Vite + React + TS (ligera; alternativa Next.js documentada en README). |
-| 4.2 | `web/src/App.tsx` | Subida de video, inputs (x,y), visor de progreso del agente (SSE `/events`), descarga GLB/USDZ. |
-| 4.3 | `web/src/components/ArViewer.tsx` | `@google/model-viewer`: render 3D + botón AR (Scene Viewer / Quick Look), QR generado en cliente (`qrcode.react`) apuntando a la URL pública del `.usdz`/`.glb`. |
-| 4.4 | `web/src/lib/api.ts` | Cliente tipado de `/segment`, `/geometry`, `/agent/runs`, `/events`. |
+| # | File | Purpose |
+|---|------|---------|
+| 4.1 | `web/package.json`, `web/vite.config.ts` | Vite + React + TS app (light; Next.js alternative documented in README). |
+| 4.2 | `web/src/App.tsx` | Video upload, (x,y) inputs, agent progress view (SSE `/events`), GLB/USDZ download. |
+| 4.3 | `web/src/components/ArViewer.tsx` | `@google/model-viewer`: 3D render + AR button (Scene Viewer / Quick Look), client-side QR (`qrcode.react`) pointing at the public `.usdz`/`.glb` URL. |
+| 4.4 | `web/src/lib/api.ts` | Typed client for `/segment`, `/geometry`, `/agent/runs`, `/events`. |
 
-Criterio de aceptación Fase 4: subir video → ver log del agente en vivo → escanear QR →
-modelo proyectado junto al objeto real en el móvil.
+Phase 4 acceptance: upload video → watch the agent log live → scan QR →
+model projected next to the real object on the phone.
 
-## Fase 5 — E2E, CI y demo
+## Phase 5 — E2E, CI & demo
 
-- `scripts/e2e.sh`: video de prueba → `/segment` → Baseten → agente → `model.glb`; falla si algún paso no devuelve 0 errores.
+- `scripts/e2e.sh`: test video → `/segment` → Baseten → agent → `model.glb`; fails if any step returns errors.
 - `.github/workflows/ci.yml`: `py_compile` + `ruff` (backend), `tsc --noEmit` (web).
-- `assets/demo.mp4` (opcional, <25 MB) + `assets/expected_geometry.json` para tests dorados.
+- `assets/demo.mp4` (optional, <25 MB) + `assets/expected_geometry.json` for golden tests.
 
 ---
 
-## Reglas de implementación (todas las fases)
+## Implementation rules (all phases)
 
-1. Sin placeholders: todo archivo entregado compila y corre; lo no entregado NO se crea.
-2. Backend 100% API + terminal; la única GUI es `web/`.
-3. Todo error de terminal (`stderr`) del agente se persiste y se reinyecta al modelo.
-4. Artefactos versionados por `job_id`/`run_id` en volúmenes, nunca rutas fijas.
+1. No placeholders: every delivered file compiles and runs; undelivered work is NOT created.
+2. Backend is 100% API + terminal; the only GUI is `web/`.
+3. Every agent terminal error (`stderr`) is persisted and re-injected into the model.
+4. Artifacts are versioned by `job_id`/`run_id` on volumes, never fixed paths.
