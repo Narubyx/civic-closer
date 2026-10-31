@@ -1,0 +1,9 @@
+# Deps de la Fase 2 (Python 3.11). La vía remota usa el endpoint
+# OpenAI-compatible de Baseten + Instructor (JSON estricto); la vía local
+# solo necesita numpy+PIL+pydantic.
+instructor>=1.5
+openai>=1.40
+httpx>=0.27
+pydantic>=2.7
+numpy>=1.26,<2
+pillow>=10.3

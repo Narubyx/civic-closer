@@ -15,7 +15,7 @@ autónomo (feedback loop, máx 10 ciclos) y publica un `.GLB` / `.USDZ` listo pa
 
 - [x] Fase 0 — Base del repo
 - [x] Fase 1 — `modal/app.py`: FastAPI + Modal GPU + SAM + tracking + 24 keyframes
-- [ ] Fase 2 — `baseten/` extracción geométrica estructurada
+- [x] Fase 2 — `baseten/`: `geometry.json` vía `muse-spark-open-1026` + fallback por siluetas
 - [ ] Fase 3 — `agent/` feedback loop watertight
 - [ ] Fase 4 — `web/` visor WebAR + QR
 
@@ -105,6 +105,24 @@ Cada `png_b64` es un PNG con el objeto segmentado sobre **fondo negro** (alfa pu
 
 Lista artefactos persistidos del job (útil para la Fase 2 / Baseten).
 
+## Quickstart — Paso 2 (geometría 3D)
+
+```bash
+pip install -r baseten/requirements.txt
+
+# Con Baseten (remoto primario, JSON estricto vía Instructor):
+export BASETEN_API_KEY=...  # BASETEN_MODEL_NAME default: muse-spark-open-1026
+python -m baseten.infer --keyframes-dir ./keyframes_out/<job_id> --meta ./keyframes_out/<job_id>/meta.json
+
+# Sin clave (fallback determinista por siluetas, numpy+PIL):
+python -m baseten.infer --keyframes-dir ./keyframes_out/<job_id> --no-remote --height-m 0.20
+# → <keyframes-dir>/geometry.json  {vertices, normals, edges, faces?, confidence, ...}
+```
+
+Contrato: metros, Y-up, objeto centrado; `vertices[i]` ↔ `normals[i]` unitaria;
+ver [baseten/schema.py](baseten/schema.py). Si el remoto falla o no hay clave,
+el CLI degrada al fallback local con exit 0 (aviso en stderr).
+
 ## Estructura
 
 ```
@@ -114,13 +132,15 @@ voxel-sam-ar/
   modal/
     app.py            # PASO 1 completo
     requirements.txt
-  baseten/            # Fase 2 (pendiente)
+  baseten/
+    schema.py         # PASO 2: contrato GeometryEstimate (Pydantic estricto)
+    infer.py          # PASO 2: cliente Baseten/Instructor + fallback por siluetas
+    requirements.txt
   agent/              # Fase 3 (pendiente)
   web/                # Fase 4 (pendiente)
 ```
 
 ## Roadmap inmediato
 
-1. `baseten/schema.py` + `baseten/infer.py` (JSON estructurado de vértices).
-2. `agent/loop.py` + `agent/mesh_tools.py` (feedback loop watertight, 10 ciclos).
-3. `web/` (Vite + model-viewer + QR).
+1. `agent/loop.py` + `agent/mesh_tools.py` (feedback loop watertight, 10 ciclos).
+2. `web/` (Vite + model-viewer + QR).
