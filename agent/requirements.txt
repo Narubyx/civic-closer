@@ -1,0 +1,11 @@
+# Deps de la Fase 3 (Python 3.11).
+# mesh_tools/loop importan pesadas de forma perezosa: el loop local sin
+# ejecución de malla solo necesita openai+httpx; la Sandbox Modal instala todo.
+open3d
+trimesh[easy]
+scipy
+numpy>=1.26,<2
+usd-core
+openai>=1.40
+httpx>=0.27
+modal>=0.66

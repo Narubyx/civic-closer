@@ -16,7 +16,7 @@ autónomo (feedback loop, máx 10 ciclos) y publica un `.GLB` / `.USDZ` listo pa
 - [x] Fase 0 — Base del repo
 - [x] Fase 1 — `modal/app.py`: FastAPI + Modal GPU + SAM + tracking + 24 keyframes
 - [x] Fase 2 — `baseten/`: `geometry.json` vía `muse-spark-open-1026` + fallback por siluetas
-- [ ] Fase 3 — `agent/` feedback loop watertight
+- [x] Fase 3 — `agent/`: feedback loop watertight (baseline + modelo, ≤10 ciclos, GLB+USDZ)
 - [ ] Fase 4 — `web/` visor WebAR + QR
 
 Plan detallado de archivos: [docs/PLAN.md](docs/PLAN.md).
@@ -123,6 +123,26 @@ Contrato: metros, Y-up, objeto centrado; `vertices[i]` ↔ `normals[i]` unitaria
 ver [baseten/schema.py](baseten/schema.py). Si el remoto falla o no hay clave,
 el CLI degrada al fallback local con exit 0 (aviso en stderr).
 
+## Quickstart — Paso 3 (feedback loop de malla)
+
+```bash
+pip install -r agent/requirements.txt
+
+# Baseline determinista (sin modelo): triangular/reparar/auditar/exportar
+python -m agent.loop --geometry ./geometry.json --exec local --max-cycles 1
+
+# Bucle agéntico completo (≤10 ciclos) en Sandbox Modal aislado:
+export META_MODEL_API_KEY=... META_MODEL_BASE_URL=...  # API OpenAI-compatible
+python -m agent.loop --geometry ./geometry.json --exec modal --max-cycles 10
+# → agent/runs/<run_id>/{cycle_XX.py, cycle_XX.log, cycle_XX.report.json,
+#                        manifest.json, model.glb, model.usdz}
+```
+
+El ciclo 0 es el baseline; si falla y hay clave, el modelo recibe
+`stderr` + `MeshReport` y reescribe el script (escalera Poisson → ball pivoting →
+alpha + repair/taubin). El USDZ se autorea como USDA + zip STORED y se revalida
+con `usd-core` cuando está disponible. Exit 0 = malla estanca, 0 errores.
+
 ## Estructura
 
 ```
@@ -136,11 +156,15 @@ voxel-sam-ar/
     schema.py         # PASO 2: contrato GeometryEstimate (Pydantic estricto)
     infer.py          # PASO 2: cliente Baseten/Instructor + fallback por siluetas
     requirements.txt
-  agent/              # Fase 3 (pendiente)
+  agent/
+    mesh_tools.py     # PASO 3: triangular/reparar/suavizar/auditar/exportar
+    prompts.py        # PASO 3: prompts + extracción de código del modelo
+    baseline_poisson.py  # PASO 3: ciclo 0 determinista
+    loop.py           # PASO 3: orquestador (local + Modal Sandbox, ≤10 ciclos)
+    requirements.txt
   web/                # Fase 4 (pendiente)
 ```
 
 ## Roadmap inmediato
 
-1. `agent/loop.py` + `agent/mesh_tools.py` (feedback loop watertight, 10 ciclos).
-2. `web/` (Vite + model-viewer + QR).
+1. `web/` (Vite + model-viewer + QR → WebAR).
